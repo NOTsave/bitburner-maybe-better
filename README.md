@@ -1,5 +1,5 @@
 # Insight's Scripts
-Welcome to Insight's Bitburner scripts - one of the Bitburner scripts of all time. test
+Welcome to Insight's Bitburner scripts - one of the Bitburner scripts of all time. :)
 
 # Downloading the whole repository
 
