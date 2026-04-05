@@ -35,7 +35,7 @@ export async function main(ns) {
         return log(ns, "ERROR: You cannot automate installing augmentations until you have unlocked singularity access (SF4).", true, 'error');
     ns.disableLog('sleep');
     if (options['prioritize-augmentations'])
-        log(ns, "INFO: The --prioritize-augmentations flag is deprecated, as this is now the default behaviour. Use --prioritize-home-ram to get back the old behaviour.")
+        log(ns, "INFO: The --prioritize-augmentations flag is deprecated, as this is now the default behaviour. Use --prioritize-home-ram to get back the old behaviour.", true, 'info')
 
     // Kill every script except this one, since it can interfere with out spending
     let pid = await runCommand(ns, `ns.ps().filter(s => s.filename != ns.args[0]).forEach(s => ns.kill(s.pid));`,
@@ -50,7 +50,8 @@ export async function main(ns) {
 
     // STEP 1: Liquidate Stocks and (SF9) Hacknet Hashes
     log(ns, 'Sell stocks and hashes...', true, 'info');
-    ns.run(getFilePath('spend-hacknet-hashes.js'), 1, '--liquidate');
+    pid = ns.run(getFilePath('spend-hacknet-hashes.js'), 1, '--liquidate');
+    if (!pid) log(ns, 'WARNING: Failed to start spend-hacknet-hashes.js', false, 'warning');
 
     // If we do not have tix api access, we cannot automate checking on or selling stocks, so skip this
     const hasTixApiAccess = await getNsDataThroughFile(ns, `ns.stock.hasTixApiAccess()`);
@@ -60,10 +61,10 @@ export async function main(ns) {
             `.reduce((t, stk) => t + (stk[0] + stk[2] > 0 ? 1 : 0), 0)`, '/Temp/owned-stocks.txt', stkSymbols);
         let ownedStocks;
         do {
-            log(ns, `INFO: Waiting for ${ownedStocks} owned stocks to be sold...`, false, 'info');
+            log(ns, `INFO: Waiting for ${ownedStocks} owned stocks to be sold...`, true, 'info');
             pid = ns.run(getFilePath('stockmaster.js'), 1, '--liquidate');
             if (pid) await waitForProcessToComplete(ns, pid, true);
-            else log(ns, `ERROR: Failed to run "stockmaster.js --liquidate" to sell ${ownedStocks} owned stocks. Will try again soon...`, false, 'true');
+            else log(ns, `ERROR: Failed to run "stockmaster.js --liquidate" to sell ${ownedStocks} owned stocks. Will try again soon...`, true, 'error');
             await ns.sleep(1000);
             ownedStocks = await countOwnedStocks();
         } while (ownedStocks > 0);
@@ -133,15 +134,19 @@ export async function main(ns) {
     // STEP 6: (SF10) Buy whatever sleeve upgrades we can afford
     if (10 in dictSourceFiles) {
         log(ns, 'Try Upgrade Sleeves...', true, 'info');
-        ns.run(getFilePath('sleeve.js'), 1, '--reserve', '0', '--aug-budget', '1', '--min-aug-batch', '1', '--buy-cooldown', '0', '--disable-training');
-        await ns.sleep(500); // Give it time to make its initial purchases. Note that we do not block on the process shutting down - it will keep running.
+        pid = ns.run(getFilePath('sleeve.js'), 1, '--reserve', '0', '--aug-budget', '1', '--min-aug-batch', '1', '--buy-cooldown', '0', '--disable-training');
+        if (pid) {
+            await ns.sleep(500); // Give it time to make its initial purchases. Note that we do not block on the process shutting down - it will keep running.
+        } else log(ns, 'WARNING: Failed to start sleeve.js', false, 'warning');
     }
 
     // STEP 7: (SF2) Buy whatever gang equipment we can afford
     if (2 in dictSourceFiles) {
         log(ns, 'Try Upgrade Gangs...', true, 'info');
-        ns.run(getFilePath('gangs.js'), 1, '--reserve', '0', '--augmentations-budget', '1', '--equipment-budget', '1');
-        await ns.sleep(500); // Give it time to make its initial purchases. Note that we do not block on the process shutting down - it will keep running.
+        pid = ns.run(getFilePath('gangs.js'), 1, '--reserve', '0', '--augmentations-budget', '1', '--equipment-budget', '1');
+        if (pid) {
+            await ns.sleep(500); // Give it time to make its initial purchases. Note that we do not block the process shutting down - it will keep running.
+        } else log(ns, 'WARNING: Failed to start gangs.js', false, 'warning');
     }
 
     // STEP 8: Buy whatever home CPU upgrades we can afford
@@ -156,33 +161,22 @@ export async function main(ns) {
         await waitForProcessToComplete(ns, pid, true);
     }
 
-    // TODO: If in corporation, and buyback shares is available, buy as many as we can afford
-
     // STEP 10: WAIT: For money to stop decreasing, so we know that external scripts have bought what they could.
     log(ns, 'Waiting for purchasing to stop...', true, 'info');
     let money = 0, lastMoney = 0, ticksWithoutPurchases = 0;
     const maxWait = Date.now() + options['max-wait-time'];
+    const gameTickDuration = 200; // Bitburner game tick is 200ms
     while (ticksWithoutPurchases < options['ticks-to-wait-for-additional-purchases'] && (Date.now() < maxWait)) {
         const start = Date.now(); // Used to wait for the game to tick.
         const refreshMoney = async () => money =
             await getNsDataThroughFile(ns, `ns.getServerMoneyAvailable(ns.args[0])`, null, ["home"]);
-        while ((Date.now() - start <= 200) && lastMoney == await refreshMoney())
+        while ((Date.now() - start <= gameTickDuration) && lastMoney == await refreshMoney())
             await ns.sleep(10); // Wait for game to tick (money to change) - might happen sooner than 200ms
         ticksWithoutPurchases = money < lastMoney ? 0 : ticksWithoutPurchases + 1;
         lastMoney = money;
     }
 
-    // TODO STEP 11: Accept any outstanding faction invitations, and claim our +1 free favour if available.
-    /*
-    const factionInvites = ns.singularity.checkFactionInvitations()
-    if (factionInvites.length > 0)
-        factionInvites.forEach(factionName => ns.singularity.joinFaction(factionName));
-    if (ns.singularity.exportGameBonus())
-        ns.singularity.exportGame();
-    // TODO: No way to close the pop-up save dialog, which is a deal-breaker for me.
-    */
-
-    // STEP 4 REDUX: If somehow we have money left over and can afford some junk augs that weren't on our desired list, grab them too
+    // STEP 11: If somehow we have money left over and can afford some junk augs that weren't on our desired list, grab them too
     log(ns, 'Seeing if we can afford any other augmentations...', true, 'info');
     facmanArgs.push('--stat-desired', '_'); // Means buy any aug with any stats
     pid = ns.run(getFilePath('faction-manager.js'), 1, ...facmanArgs);
@@ -192,10 +186,10 @@ export async function main(ns) {
     // As well as to ensure that data written out on this bitnode don't confuse scripts in the next one.
     await waitForProcessToComplete(ns, ns.run(getFilePath('cleanup.js')), true);
 
-    // FINALLY: If configured, soft reset
+    // FINALLY: If configured, perform reset
     if (options.reset || options['install-augmentations']) {
         log(ns, '\nCatch you on the flippity-flip\n', true, 'success');
-        await ns.sleep(1000); // Pause for effect?
+        await ns.sleep(1000); // Brief pause for dramatic effect
         const resetScript = options['on-reset-script'] ??
             // Default script (if none is specified) is stanek.js if we have it (which in turn will spawn daemon.js when done)
             (purchasedAugmentations.includes(`Stanek's Gift - Genesis`) ? getFilePath('stanek.js') : getFilePath('daemon.js'));
