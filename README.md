@@ -1,5 +1,5 @@
 # Insight's Scripts
-Welcome to Insight's Bitburner scripts - one of the Bitburner scripts of all time. Hosted on my personal github because all the best hackers dox themselves.
+Welcome to Insight's Bitburner scripts - one of the Bitburner scripts of all time. test
 
 # Downloading the whole repository
 
