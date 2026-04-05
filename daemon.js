@@ -365,6 +365,7 @@ export async function main(ns) {
             { name: "spend-hacknet-hashes.js", shouldRun: () => reqRam(64) && 9 in dictSourceFiles, args: [], shouldTail: false }, // Always have this running to make sure hashes aren't wasted
             { name: "sleeve.js", shouldRun: () => reqRam(64) && 10 in dictSourceFiles }, // Script to create manage our sleeves for us
             { name: "gangs.js", shouldRun: () => reqRam(64) && 2 in dictSourceFiles }, // Script to create manage our gang for us
+            { name: "corp.js", shouldRun: () => reqRam(32) && 3 in dictSourceFiles }, // Script to manage corporation for us (RAM-safe corp automation)
             {
                 name: "work-for-factions.js", args: ['--fast-crimes-only', '--no-coding-contracts'],  // Singularity script to manage how we use our "focus" work.
                 shouldRun: () => 4 in dictSourceFiles && reqRam(256 / (2 ** dictSourceFiles[4]) && !studying) // Higher SF4 levels result in lower RAM requirements
@@ -1436,8 +1437,8 @@ export async function main(ns) {
                     schedItem.toolShortName = "manualhack";
                 const result = await arbitraryExecution(ns, getTool(schedItem.toolShortName), schedItem.threadsNeeded, args)
                 if (result == false) { // If execution fails, we have probably run out of ram.
-                    log(ns, `WARNING: Scheduling failed for ${getTargetSummary(currentTarget)} ${discriminationArg} of ${cyclesScheduled} Took: ${Date.now() - start}ms`, false, 'warning');
-                    currentTarget.previousCycle = `INCOMPLETE. Tried: ${cyclesScheduled} x ${getTargetSummary(currentTarget)}`;
+                    if (verbose) log(ns, `INFO: Scheduling failed for ${getTargetSummary(currentTarget)} ${discriminationArg} (RAM likely full)`);
+                    currentTarget.previousCycle = `INCOMPLETE batch ${cyclesScheduled} for ${getTargetSummary(currentTarget)}`;
                     return false;
                 }
             }
