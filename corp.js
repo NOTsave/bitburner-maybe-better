@@ -2,7 +2,7 @@ import {
     log, getConfiguration, instanceCount, getNsDataThroughFile,
     formatMoney, formatDuration, getErrorInfo
 } from './helpers.js'
-
+//tento kod je prakticky bez testu, bugy nejspsi budou a je na vlastni nebezpeci, update nekdy 8 kvetna ig 
 // ── Args schema ───────────────────────────────────────────────────────────────
 const argsSchema = [
     ['tail',        false],   // Otevři log okno
