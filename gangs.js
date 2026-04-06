@@ -6,6 +6,7 @@ import {
 // Global config
 const updateInterval = 200; // We can improve our timing by updating more often than gang stats do (which is every 2 seconds for stats, every 20 seconds for territory)
 const wantedPenaltyThreshold = 0.0001; // Don't let the wanted penalty get worse than this
+const wantedLevelFloor = 1.01; // Wanted level minimum is 1.0; use 1.01 as threshold with floating-point tolerance
 const offStatCostPenalty = 50; // Equipment that doesn't contribute to our main stats suffers a percieved cost penalty of this multiple
 const defaultMaxSpendPerTickTransientEquipment = 0.002; // If the --equipment-budget is not specified, spend up to this percent of non-reserved cash on temporary upgrades (equipment)
 const defaultMaxSpendPerTickPermanentEquipment = 0.2; // If the --augmentation-budget is not specified, spend up to this percent of non-reserved cash on permanent member upgrades
@@ -55,9 +56,9 @@ const argsSchema = [
     ['ascend-multi-threshold-spacing', 0.05], // Members will space their acention multis by this amount to ensure they are ascending at different rates
     // Note: given the above two defaults, members would ascend at multis [1.6, 1.55, 1.50, ..., 1.1, 1.05] once you have 12 members.
     ['min-training-ticks', 10], // Require this many ticks of training after ascending or recruiting to rebuild stats
-    ['reserve', null], // Reserve this much cash before determining spending budgets (defaults to contents of reserve.txt if not specified)
-    ['augmentations-budget', null], // Percentage of non-reserved cash to spend per tick on permanent member upgrades (If not specified, uses defaultMaxSpendPerTickPermanentEquipment)
-    ['equipment-budget', null], // Percentage of non-reserved cash to spend per tick on permanent member upgrades (If not specified, uses defaultMaxSpendPerTickTransientEquipment)
+    ['reserve', -1], // Reserve this much cash before determining spending budgets (defaults to contents of reserve.txt if not specified)
+    ['augmentations-budget', -1], // Percentage of non-reserved cash to spend per tick on permanent member upgrades (If not specified, uses defaultMaxSpendPerTickPermanentEquipment)
+    ['equipment-budget', -1], // Percentage of non-reserved cash to spend per tick on permanent member upgrades (If not specified, uses defaultMaxSpendPerTickTransientEquipment)
     ['money-focus', false], // Always optimize gang crimes for maximum monetary gain. Is otherwise balanced.
     ['reputation-focus', false], // Always optimize gang crimes for maximum reputation gain. Is otherwise balanced.
 ];
@@ -287,6 +288,9 @@ async function optimizeGangCrime(ns, myGangInfo) {
         myGangInfo.respect > 200 ? -0.01 * myGangInfo.wantedLevel /* Recover from wanted penalty */ :
         currentWantedPenalty < -0.9 * wantedPenaltyThreshold && myGangInfo.wantedLevel >= (1.1 + myGangInfo.respect / 10000) ? 0 /* Sustain */ :
             Math.max(myGangInfo.respectGainRate / 1000, myGangInfo.wantedLevel / 10) /* Allow wanted to increase at a manageable rate */;
+    // If wanted level is at the minimum (1.0), be very generous with tolerance -- VJ is pointless at the floor
+    if (myGangInfo.wantedLevel <= wantedLevelFloor)
+        wantedGainTolerance = Math.max(wantedGainTolerance, myGangInfo.respectGainRate / 100);
     const playerData = await getNsDataThroughFile(ns, 'ns.getPlayer()');
     // Find out how much reputation we need, without SF4, we estimate gang faction rep based on current gang rep
     let factionRep = -1;
@@ -358,11 +362,6 @@ async function optimizeGangCrime(ns, myGangInfo) {
             `Wanted: ${oldGangInfo.wantedLevelGainRate.toPrecision(3)} -> ${myGangInfo.wantedLevelGainRate.toPrecision(3)}, ` +
             `Rep: ${formatNumberShort(oldGangInfo.respectGainRate)} -> ${formatNumberShort(myGangInfo.respectGainRate)}, Money: ${formatMoney(oldGangInfo.moneyGainRate)} -> ${formatMoney(myGangInfo.moneyGainRate)}`);
         // Check that our calculations (which we stole from game source code) are about right
-        if ((Math.abs(myGangInfo.wantedLevelGainRate - optWanted) / optWanted > 0.01) || (Math.abs(myGangInfo.respectGainRate - optRespect) / optRespect > 0.01) || (Math.abs(myGangInfo.moneyGainRate - optMoney) / optMoney > 0.01))
-            log(ns, `WARNING: Calculated new rates would be Rep:${formatNumberShort(optRespect)} Wanted: ${optWanted.toPrecision(3)} Money: ${formatMoney(optMoney)}` +
-                `but they are Rep:${formatNumberShort(myGangInfo.respectGainRate)} Wanted: ${myGangInfo.wantedLevelGainRate.toPrecision(3)} Money: ${formatMoney(myGangInfo.moneyGainRate)}`, false, 'warning');
-    } else
-        log(ns, `INFO: Determined all ${myGangMembers.length} gang member assignments are already optimal for ${optStat} with wanted gain tolerance ${wantedGainTolerance.toPrecision(2)} (${elapsed} ms).`);
     // Fail-safe: If we somehow over-shot and are generating wanted levels, start randomly assigning members to vigilante to fix it
     if (myGangInfo.wantedLevelGainRate > wantedGainTolerance) await fixWantedGainRate(ns, myGangInfo, wantedGainTolerance);
 }
@@ -370,6 +369,8 @@ async function optimizeGangCrime(ns, myGangInfo) {
 /** @param {NS} ns
  * Logic to reduce crime tiers when we're generating a wanted level **/
 async function fixWantedGainRate(ns, myGangInfo, wantedGainTolerance = 0) {
+    // If wanted level is already at the minimum floor, no point assigning members to VJ
+    if (myGangInfo.wantedLevel <= wantedLevelFloor) return;
     // TODO: steal actual wanted level calcs and strategically pick the member(s) who can bridge the gap while losing the least rep/sec
     let lastWantedLevelGainRate = myGangInfo.wantedLevelGainRate;
     log(ns, `WARNING: Generating wanted levels (${lastWantedLevelGainRate.toPrecision(3)}/sec > ${wantedGainTolerance.toPrecision(3)}/sec), temporarily assigning random members to Vigilante Justice...`, false, 'warning');
