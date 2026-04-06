@@ -230,7 +230,7 @@ export async function main(ns) {
         if (canUseCache)
             psResult = psCache[serverName];
         // Note: We experimented with ram-dodging `ps`, but there's so much data involed that serializing/deserializing generates a lot of latency
-        //psResult ??= await getNsDataThroughFile(ns, 'ns.ps(ns.args[0])', null, [serverName]));
+        //psResult ??= await getNsDataThroughFile(ns, 'ns.ps(ns.args[0])', null, [serverName]);
         psResult ??= psCache[serverName] = ns.ps(serverName);
         return psResult;
     }
@@ -881,6 +881,7 @@ export async function main(ns) {
                     skipped.push(...targetingOrder.slice(i));
                     workCapped = true;
                     break;
+                }
                 // TODO: Make better use of RAM by prepping more targets. Try not scheduling batches way in advance with a sleep, but instead
                 //       witholding batches until they're closer to when they need to be kicked off.
                 //       We can add logic to kill lower priority tasks using RAM (such as share, and scripts targetting low priority targets)
@@ -982,13 +983,14 @@ export async function main(ns) {
                 }
                 //log(ns, 'Prepping: ' + prepping.map(s => s.name).join(', '))
                 //log(ns, 'targeting: ' + targeting.map(s => s.name).join(', '))
-            } catch (err) {
-                // Sometimes a script is shut down by throwing an object containing internal game script info. Detect this and exit silently
-                if (err?.env?.stopFlag) return;
-                log(ns, `WARNING: daemon.js Caught an error in the targeting loop: ${getErrorInfo(err)}`, true, 'warning');
-                continue;
             }
+            await ns.sleep(loopInterval); // Prevent infinite loop without delay
         } while (!runOnce);
+    }
+    } catch (err) {
+        // Sometimes a script is shut down by throwing an object containing internal game script info. Detect this and exit silently
+        if (err?.env?.stopFlag) return;
+        log(ns, `WARNING: daemon.js Caught an error in the targeting loop: ${getErrorInfo(err)}`, true, 'warning');
     }
 
     // How much a weaken thread is expected to reduce security by
@@ -2354,5 +2356,11 @@ export async function main(ns) {
     }
 
     // Start daemon.js
-    await startup_withRetries(ns);
+    try {
+        await startup_withRetries(ns);
+    } catch (err) {
+        ns.tprint("Daemon encountered a critical error: " + err);
+    }
+}
+}
 }
