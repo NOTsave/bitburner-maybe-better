@@ -58,6 +58,41 @@ export async function main(ns) {
     options = getConfiguration(ns, argsSchema);
     if (!options || await instanceCount(ns) > 1) return;
 
+    // Check if corp.js is already running and kill the previous instance
+    const runningScripts = await getNsDataThroughFile(ns, 'ns.ps(ns.args[0])', null, ["home"]);
+    const existingCorp = runningScripts.find(s => s.filename.includes('corp.js') && s.pid !== ns.getScriptPid());
+    if (existingCorp) {
+        log(ns, `INFO: Found existing corp.js instance (pid: ${existingCorp.pid}), killing it...`, false, 'info');
+        await getNsDataThroughFile(ns, 'ns.kill(ns.args[0])', null, [existingCorp.pid]);
+        await ns.sleep(1000); // Give it time to die
+    }
+
+    // Check if SF3 (Corporations) is available (RAM-optimized)
+    const unlockedSFs = await getNsDataThroughFile(ns, 'ns.singularity.getOwnedSourceFiles()', '/Temp/corp-sf-check.txt');
+    if (!(3 in unlockedSFs)) {
+        log(ns, 'ERROR: This script requires SF3 (Corporations) to run corporations.', true, 'error');
+        log(ns, 'You do not have SF3. Please unlock BitNode 3 first to use corp.js.', true, 'error');
+        return;
+    }
+
+    // Write a protection flag to prevent other scripts from killing this
+    const protectionData = JSON.stringify({
+        pid: ns.getScriptPid(),
+        startTime: Date.now(),
+        lastCheck: Date.now()
+    });
+    ns.write('Temp/corp-protection.txt', protectionData, 'w');
+
+    // Check if watchdog is already running (reuse existing runningScripts)
+    const watchdogRunning = runningScripts.find(s => s.filename.includes('corp-watchdog.js'));
+    if (!watchdogRunning) {
+        log(ns, 'INFO: Starting corp-watchdog.js for protection...', false, 'info');
+        const watchdogPid = ns.run('corp-watchdog.js', 1);
+        if (watchdogPid === 0) {
+            log(ns, 'WARNING: Failed to start watchdog, continuing without protection...', false, 'warning');
+        }
+    }
+
     if (options.tail) ns.tail();
     ns.disableLog('ALL');
     ns.clearLog();
@@ -70,6 +105,34 @@ export async function main(ns) {
     let state = loadState(ns);
     log(ns, `Načten stav: fáze ${state.phase}, produkt č. ${state.productNum ?? 1}`);
 
+    // Start protection monitoring with error handling and cleanup
+    let protectionInterval;
+    let protectionErrorCount = 0;
+    const maxProtectionErrors = 5;
+    
+    const updateProtectionFile = () => {
+        try {
+            const currentProtectionData = JSON.stringify({
+                pid: ns.getScriptPid(),
+                startTime: Date.now(),
+                lastCheck: Date.now()
+            });
+            ns.write('Temp/corp-protection.txt', currentProtectionData, 'w');
+            protectionErrorCount = 0; // Reset error count on success
+        } catch (error) {
+            protectionErrorCount++;
+            log(ns, `WARNING: Failed to update protection file (${protectionErrorCount}/${maxProtectionErrors}): ${getErrorInfo(error)}`, false, 'warning');
+            
+            // If too many errors, stop trying to update protection
+            if (protectionErrorCount >= maxProtectionErrors) {
+                log(ns, 'ERROR: Too many protection file update failures, stopping protection updates', false, 'error');
+                if (protectionInterval) clearInterval(protectionInterval);
+            }
+        }
+    };
+    
+    protectionInterval = setInterval(updateProtectionFile, 5000); // Update every 5 seconds
+
     while (state.phase < PHASE.DONE) {
         try {
             state = await runPhase(ns, state);
@@ -78,6 +141,20 @@ export async function main(ns) {
             await ns.sleep(5000);
         }
         await ns.sleep(300);
+    }
+
+    // Clean up protection file and interval when done with proper error handling
+    if (protectionInterval) {
+        clearInterval(protectionInterval);
+        log(ns, 'INFO: Stopped protection monitoring', false, 'info');
+    }
+    
+    // Remove protection file to signal completion
+    try {
+        ns.write('Temp/corp-protection.txt', '', 'w');
+        log(ns, 'INFO: Cleaned up protection file', false, 'info');
+    } catch (cleanupError) {
+        log(ns, `WARNING: Failed to cleanup protection file: ${getErrorInfo(cleanupError)}`, false, 'warning');
     }
 
     log(ns, 'SUCCESS: corp.js dokončen!', true, 'success');
