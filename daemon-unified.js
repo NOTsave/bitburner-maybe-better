@@ -278,18 +278,18 @@ export async function main(ns) {
         
         // Debug logging
         if (verbose) {
-            log(ns, `DEBUG: getOptimalTargets called`, false, 'info');
-            log(ns, `DEBUG: _allServers type: ${typeof _allServers}`, false, 'info');
-            log(ns, `DEBUG: _allServers isArray: ${Array.isArray(_allServers)}`, false, 'info');
-            log(ns, `DEBUG: _allServers value: ${JSON.stringify(_allServers)}`, false, 'info');
-            log(ns, `DEBUG: servers type: ${typeof servers}`, false, 'info');
-            log(ns, `DEBUG: servers isArray: ${Array.isArray(servers)}`, false, 'info');
-            log(ns, `DEBUG: servers length: ${servers.length}`, false, 'info');
+            ns.print(`DEBUG: getOptimalTargets called`);
+            ns.print(`DEBUG: _allServers type: ${typeof _allServers}`);
+            ns.print(`DEBUG: _allServers isArray: ${Array.isArray(_allServers)}`);
+            ns.print(`DEBUG: _allServers value: ${JSON.stringify(_allServers)}`);
+            ns.print(`DEBUG: servers type: ${typeof servers}`);
+            ns.print(`DEBUG: servers isArray: ${Array.isArray(servers)}`);
+            ns.print(`DEBUG: servers length: ${servers.length}`);
         }
         
         for (const server of servers) {
             if (verbose) {
-                log(ns, `DEBUG: Processing server: ${JSON.stringify(server)}`, false, 'info');
+                ns.print(`DEBUG: Processing server: ${JSON.stringify(server)}`);
             }
             if (targets.length >= maxTargets) break;
             
@@ -421,7 +421,7 @@ export async function main(ns) {
         const loopStart = Date.now();
         
         if (verbose) {
-            log(ns, `DEBUG: Starting main loop ${loopCount}`, false, 'info');
+            ns.print(`DEBUG: Starting main loop ${loopCount}`);
         }
         
         try {
@@ -439,9 +439,9 @@ export async function main(ns) {
             if (loopCount % 20 === 0) { // Every 20 loops
                 try {
                     if (verbose) {
-                        log(ns, `DEBUG: Getting optimal targets (loop ${loopCount})`, false, 'info');
-                        log(ns, `DEBUG: _allServers type: ${typeof _allServers}, isArray: ${Array.isArray(_allServers)}`, false, 'info');
-                        log(ns, `DEBUG: _allServers length: ${_allServers?.length || 'undefined'}`, false, 'info');
+                        ns.print(`DEBUG: Getting optimal targets (loop ${loopCount})`);
+                        ns.print(`DEBUG: _allServers type: ${typeof _allServers}, isArray: ${Array.isArray(_allServers)}`);
+                        ns.print(`DEBUG: _allServers length: ${_allServers?.length || 'undefined'}`);
                     }
                     const targets = getOptimalTargets(_cachedPlayerInfo?.skills?.hacking || 1, ns.getServerMaxRam('home') - homeReservedRam);
                     if (verbose) {
@@ -458,6 +458,10 @@ export async function main(ns) {
                 } catch (targetError) {
                     log(ns, `ERROR: Target selection error: ${targetError.message}`, false, 'error');
                     log(ns, `ERROR: Target stack: ${targetError.stack}`, false, 'error');
+                    ns.print(`FATAL TARGET ERROR: ${targetError.message}`);
+                    ns.print(`Target Stack: ${targetError.stack}`);
+                    // Kill the program on target error
+                    throw targetError;
                 }
             }
             
@@ -477,6 +481,10 @@ export async function main(ns) {
         } catch (error) {
             log(ns, `ERROR: Main loop error: ${error.message}`, false, 'error');
             log(ns, `ERROR: Stack: ${error.stack}`, false, 'error');
+            ns.print(`FATAL ERROR: ${error.message}`);
+            ns.print(`Stack: ${error.stack}`);
+            // Kill the program on error
+            throw error;
         }
         
         // Adaptive sleep based on performance
