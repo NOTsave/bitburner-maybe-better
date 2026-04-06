@@ -224,11 +224,13 @@ export async function main(ns) {
                 });
                 
                 const batchResults = await Promise.allSettled(batchPromises);
-                batchResults.forEach(result => {
-                    if (result.status === 'fulfilled' && result.value) {
-                        serverDetails.push(result.value);
-                    }
-                });
+                if (Array.isArray(batchResults)) {
+                    batchResults.forEach(result => {
+                        if (result.status === 'fulfilled' && result.value) {
+                            serverDetails.push(result.value);
+                        }
+                    });
+                }
                 
                 // Longer delay between batches
                 if (i + batchSize < allHostNames.length) {
@@ -265,6 +267,11 @@ export async function main(ns) {
         
         // Ensure _allServers is an array
         const servers = Array.isArray(_allServers) ? _allServers : [];
+        
+        // Debug logging
+        if (verbose) {
+            log(ns, `DEBUG: _allServers type: ${typeof _allServers}, isArray: ${Array.isArray(_allServers)}, length: ${servers.length}`, false, 'info');
+        }
         
         for (const server of servers) {
             if (targets.length >= maxTargets) break;
@@ -423,6 +430,7 @@ export async function main(ns) {
             
         } catch (error) {
             log(ns, `ERROR: Main loop error: ${error.message}`, false, 'error');
+            log(ns, `ERROR: Stack: ${error.stack}`, false, 'error');
         }
         
         // Adaptive sleep based on performance
