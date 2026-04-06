@@ -1,8 +1,13 @@
 import {
-    log, getFilePath, getConfiguration, instanceCount, getNsDataThroughFile, runCommand, waitForProcessToComplete,
+    log, getConfiguration, instanceCount, getNsDataThroughFile, runCommand, waitForProcessToComplete,
     getActiveSourceFiles, tryGetBitNodeMultipliers, getStocksValue, unEscapeArrayArgs,
     formatMoney, formatDuration, formatNumber, getErrorInfo, tail, jsonReplacer
 } from './helpers.js'
+
+// Cache frequently used format functions to reduce property access
+const fmtMoney = formatMoney;
+const fmtDuration = formatDuration;
+const fmtNumber = formatNumber;
 
 const argsSchema = [ // The set of all command line arguments
     ['next-bn', 0], // If we destroy the current BN, the next BN to start
@@ -256,8 +261,16 @@ export async function main(ns) {
     /** Ram-dodge getting player info.
      * @param {NS} ns
      * @returns {Promise<Player>} */
+    let cachedPlayerInfo, lastPlayerUpdate;
     async function getPlayerInfo(ns) {
-        return await getNsDataThroughFile(ns, `ns.getPlayer()`);
+        // Cache player info for short periods to reduce API calls
+        const now = Date.now();
+        if (cachedPlayerInfo && (now - lastPlayerUpdate) < 1000) { // Cache for 1 second
+            return cachedPlayerInfo;
+        }
+        cachedPlayerInfo = await getNsDataThroughFile(ns, `ns.getPlayer()`);
+        lastPlayerUpdate = now;
+        return cachedPlayerInfo;
     }
 
     /** Update some information that can be safely cached for small periods of time
@@ -329,7 +342,7 @@ export async function main(ns) {
             //    otherwise, assume our hack gain rate is too low in this reset to make it all the way to 2500.
             if (totalWorth >= moneyReq && player.skills.hacking >= (2500 * 0.75))
                 prioritizeHackForDaedalus = true;
-            //log(ns, `total worth: ${formatMoney(totalWorth)} moneyReq: ${formatMoney(moneyReq)} prioritizeHackForDaedalus: ${prioritizeHackForDaedalus}`)
+            //log(ns, `total worth: ${fmtMoney(totalWorth)} moneyReq: ${fmtMoney(moneyReq)} prioritizeHackForDaedalus: ${prioritizeHackForDaedalus}`)
             return reservingMoneyForDaedalus = false; // Don't reserve money until hack level suffices
         }
         // If we have sufficient augs and hacking, the only requirement left is the money (100b)
@@ -339,7 +352,7 @@ export async function main(ns) {
             //       never reserve money in case this requirement is not met, or we're potentially just wasting money
             if (!(4 in unlockedSFs)) {
                 log(ns, `SUCCESS: ${player.money < moneyReq ? "If you sell your stocks, y" : "Y"}ou should have enough money ` +
-                    `(>=${formatMoney(moneyReq)}) and a sufficiently high hack level (>=${2500}) to get an invite from the faction Daedalus. ` +
+                    `(>=${fmtMoney(moneyReq)}) and a sufficiently high hack level (>=${2500}) to get an invite from the faction Daedalus. ` +
                     `Before you attempt this though, ensure you have ${bitNodeMults.DaedalusAugsRequirement} ` +
                     `augmentations installed (scripts cannot check this without SF4).`, true, 'success');
                 return autoJoinDaedalusUnavailable = true; // We won't show this again.
@@ -358,8 +371,8 @@ export async function main(ns) {
         else if (reservingMoneyForDaedalus && totalWorth < moneyReq * 0.999 /* slight buffer to let cash recover */) {
             reservingMoneyForDaedalus = false; // Cancel the hold on funds, and wait for total worth to increase again
             disableStockmasterForDaedalus = false; // Allow stockmaster to be relaunched
-            log(ns, `WARN: We previously had sufficient wealth to earn a Daedalus invite (>=${formatMoney(moneyReq)}), ` +
-                `but our wealth somehow decreased (to ${formatMoney(totalWorth)}) before the invite was recieved, ` +
+            log(ns, `WARN: We previously had sufficient wealth to earn a Daedalus invite (>=${fmtMoney(moneyReq)}), ` +
+                `but our wealth somehow decreased (to ${fmtMoney(totalWorth)}) before the invite was recieved, ` +
                 `so we'll need to wait for it to recover and try again later.`, false, 'warning');
         }
     }
@@ -404,7 +417,7 @@ export async function main(ns) {
 
         if (!loggedBnCompletion) {
             const text = `BN ${resetInfo.currentNode}.${(dictOwnedSourceFiles[resetInfo.currentNode] || 0) + 1} completed at ` +
-                `${formatDuration(getTimeInBitnode())} ` +
+                `${fmtDuration(getTimeInBitnode())} ` +
                 `(${(player.skills.hacking >= wdHack ? `hack (${wdHack.toFixed(0)})` : 'bladeburner')} win condition)`;
             persist_log(ns, text);
             log(ns, `SUCCESS: ${text}`, true, 'success');
@@ -565,13 +578,13 @@ export async function main(ns) {
                         }
                     }
                     if (!existingSpendHashesProc) { // 
-                        log(ns, `Identified that the best hack income server is ${bestServer} worth ${formatMoney(gain)}/sec.`);
+                        log(ns, `Identified that the best hack income server is ${bestServer} worth ${fmtMoney(gain)}/sec.`);
                         const spendHashesArgs = ["--liquidate", "--spend-on-server", bestServer, "--spend-on", "Increase_Maximum_Money"];
                         if (shouldReduceMinSecurity) spendHashesArgs.push("--spend-on", "Reduce_Minimum_Security");
                         launchScriptHelper(ns, 'spend-hacknet-hashes.js', spendHashesArgs);
                     }
                 } else if (gain <= 1)
-                    log_once(ns, `INFO: The best server (${bestServer})'s hack income multiplier (${formatNumber(gain)}) is currently too severely penalized ` +
+                    log_once(ns, `INFO: The best server (${bestServer})'s hack income multiplier (${fmtNumber(gain)}) is currently too severely penalized ` +
                         `(< ${spendHashesMultThreshold}) to merit launching spend-hacknet-hashes.js to boost servers. (Configure with --spend-hashes-on-server-hacking-threshold)`);
                 else
                     log(ns, `WARNING: strServerIncomeInfo was not empty, but could not determine best server:\n${strServerIncomeInfo}`);
@@ -663,10 +676,10 @@ export async function main(ns) {
             (["--xp-only"].some(arg => !daemonArgs.includes(arg) && existingDaemon.args.includes(arg)))
         if (launchDaemon) {
             if (existingDaemon) {
-                daemonRelaunchMessage ??= `Relaunching daemon.js with new arguments since the current instance doesn't include all the args we want.`;
+                daemonRelaunchMessage ??= `Relaunching daemon-unified.js with new arguments since the current instance doesn't include all the args we want.`;
                 log(ns, daemonRelaunchMessage);
             }
-            let daemonPid = launchScriptHelper(ns, 'daemon.js', daemonArgs);
+            let daemonPid = launchScriptHelper(ns, 'daemon-unified.js', daemonArgs);
             daemonStartTime = Date.now();
             // Open the tail window if it's the start of a new BN. Especially useful to new players.
             if (getTimeInBitnode() < 1000 * 60 * 5 || homeRam == 8) // First 5 minutes, or BN1.1 where we have 8GB ram
@@ -758,13 +771,13 @@ export async function main(ns) {
         const moneySources = await getPlayerMoneySources(ns);
         const casinoEarnings = moneySources.sinceInstall.casino;
         if (casinoEarnings >= 1e10) {
-            log(ns, `INFO: Skipping running casino.js, as we've previously earned ${formatMoney(casinoEarnings)} and been kicked out.`);
+            log(ns, `INFO: Skipping running casino.js, as we've previously earned ${fmtMoney(casinoEarnings)} and been kicked out.`);
             return ranCasino = true;
         }
         // If we already have more than 1t money but hadn't run casino.js yet, don't bother. Another 10b won't move the needle much.
         const playerWealth = player.money + (await getStocksValue(ns));
         if (playerWealth >= 1e12) {
-            log(ns, `INFO: Skipping running casino.js, since we're already ridiculously wealthy (${formatMoney(playerWealth)} > 1t).`);
+            log(ns, `INFO: Skipping running casino.js, since we're already ridiculously wealthy (${fmtMoney(playerWealth)} > 1t).`);
             return ranCasino = true;
         }
 
@@ -779,14 +792,14 @@ export async function main(ns) {
             const incomePerMs = (playerWealth - (cashRootBought ? 1e6 : 0)) / getTimeInAug();
             const incomePerMinute = incomePerMs * 60_000;
             if (incomePerMinute >= 5e9) {
-                log(ns, `INFO: Skipping running casino.js this augmentation, since our income (${formatMoney(incomePerMinute)}/min) >= 5b/min`);
+                log(ns, `INFO: Skipping running casino.js this augmentation, since our income (${fmtMoney(incomePerMinute)}/min) >= 5b/min`);
                 return ranCasino = true;
             }
         }
 
         // If we aren't in Aevum already, wait until we have the 200K required to travel (plus some extra buffer to actually spend at the casino)
         if (player.city != "Aevum" && player.money < 300000)
-            return log_once(ns, `INFO: Waiting until we have ${formatMoney(300000)} to travel to Aevum and run casino.js`);
+            return log_once(ns, `INFO: Waiting until we have ${fmtMoney(300000)} to travel to Aevum and run casino.js`);
 
         // Run casino.js (and expect this script to get killed in the process)
         // Make sure "work-for-factions.js" is dead first, lest it steal focus and break the casino script before it has a chance to kill all scripts.
@@ -869,7 +882,7 @@ export async function main(ns) {
         const augSummary = `${pendingAugCount} of ${facman.unpurchased_count - 1} remaining augmentations` + // Unowned - 1 because we can always buy more Neuroflux
             (pendingNfCount > 0 ? ` + ${pendingNfCount} levels of NeuroFlux.` : '.') +
             (pendingAugCount > 0 ? `\n    Augs: [\"${augsToInstall.join("\", \"")}\"]` : '');
-        let resetStatus = `Reserving ${formatMoney(totalCost)} to install ${augSummary}`
+        let resetStatus = `Reserving ${fmtMoney(totalCost)} to install ${augSummary}`
         let shouldReset = options['install-for-augs'].some(a => facman.affordable_augs.includes(a)) ||
             pendingAugCount >= augsNeeded || pendingAugInclNfCount >= augsNeededInclNf;
 
@@ -903,9 +916,9 @@ export async function main(ns) {
 
         // If not ready to reset, set a status with our progress and return
         if (!shouldReset) {
-            setStatus(ns, `Currently at ${formatDuration(getTimeInAug())} since last aug. ` +
+            setStatus(ns, `Currently at ${fmtDuration(getTimeInAug())} since last aug. ` +
                 `Waiting for ${augsNeeded} new augs (or ${augsNeededInclNf} including NeuroFlux levels) before installing.` +
-                `\nCan currently get: ${augSummary}` + (pendingAugCount == 0 ? '' : `\n  Total Cost: ${formatMoney(totalCost)}`) +
+                `\nCan currently get: ${augSummary}` + (pendingAugCount == 0 ? '' : `\n  Total Cost: ${fmtMoney(totalCost)}`) +
                 ` (\`run faction-manager.js\` for details)`, augSummary);
             return reservedPurchase = 0; // If we were previously reserving money for a purchase, reset that flag now
         }
@@ -919,7 +932,7 @@ export async function main(ns) {
             if (reservedPurchase == 0)
                 installCountdown = Date.now() + options['install-countdown'];
             else { // If we were already reserving for a purchase and the number went up, log a notice of the timer being reset.
-                let purchaseChangeLog = `INFO: The augmentation purchase we can afford has increased from ${formatMoney(reservedPurchase)} to ${formatMoney(totalCost)}.`
+                let purchaseChangeLog = `INFO: The augmentation purchase we can afford has increased from ${fmtMoney(reservedPurchase)} to ${fmtMoney(totalCost)}.`
                 // First, check if we're ready to install TRP - if so, don't delay the install for any additional augmentations.
                 if (!augsToInstall.includes(augTRP)) {
                     // Otherwise, each time we can afford more augs, reset the install delay timer to take advantage of "momentum"
@@ -940,15 +953,15 @@ export async function main(ns) {
         }
         // We must wait until the configured cooldown elapses before we install augs.
         if (installCountdown > Date.now()) {
-            resetStatus += `\n  Waiting for ${formatDuration(options['install-countdown'])} (--install-countdown) ` +
+            resetStatus += `\n  Waiting for ${fmtDuration(options['install-countdown'])} (--install-countdown) ` +
                 `to elapse before we install, in case we're close to being able to purchase more augmentations...`;
             setStatus(ns, resetStatus);
-            ns.toast(`Heads up: Autopilot plans to reset in ${formatDuration(installCountdown - Date.now())}`, 'info');
+            ns.toast(`Heads up: Autopilot plans to reset in ${fmtDuration(installCountdown - Date.now())}`, 'info');
             return reservedPurchase = totalCost;
         }
 
         // Otherwise, we've got the money reserved, we can afford the augs, we should be confident to ascend
-        const resetLog = `  Invoking ascend.js at ${formatDuration(getTimeInAug()).padEnd(11)} since last aug to install: ${augSummary}`;
+        const resetLog = `  Invoking ascend.js at ${fmtDuration(getTimeInAug()).padEnd(11)} since last aug to install: ${augSummary}`;
         persist_log(ns, log(ns, resetLog, true, 'info'));
 
         // Kick off ascend.js

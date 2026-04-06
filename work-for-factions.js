@@ -1177,14 +1177,40 @@ export async function workForMegacorpFactionInvite(ns, factionName, waitForInvit
     while (((currentReputation = (await getCompanyReputation(ns, companyName))) < repRequiredForFaction) && !player.factions.includes(factionName)) {
         if (breakToMainLoop()) return ns.print('INFO: Interrupting corporation work to check on high-level priorities.');
         // Determine the next promotion we're striving for (the sooner we get promoted, the faster we can earn company rep)
-        const getTier = job => Math.min( // Check all requirements for all job (taking into account modifiers) and find the minimum we meet
-            job.reqRep.filter(r => (r * (backdoored ? 0.75 : 1)) <= currentReputation).length,
-            job.reqHck?.filter(h => (h === 0 ? 0 : h + statModifier) <= player.skills.hacking).length ?? job.reqStr?.filter(s => (s === 0 ? 0 : s + statModifier) <= player.skills.strength).length ?? 999,
-            job.reqCha?.filter(c => (c === 0 ? 0 : c + statModifier) <= player.skills.charisma).length ?? 999,
-            job.reqDef?.filter(d => (d === 0 ? 0 : d + statModifier) <= player.skills.defense).length ?? 999,
-            job.reqDex?.filter(d => (d === 0 ? 0 : d + statModifier) <= player.skills.dexterity).length ?? 999,
-            job.reqAgi?.filter(a => (a === 0 ? 0 : a + statModifier) <= player.skills.agility).length ?? 999
-        ) - 1;
+        /**
+         * Calculate the highest job tier a player qualifies for based on their stats
+         * @param {Object} job - Job object with requirements
+         * @returns {number} - Maximum tier the player qualifies for (-1 if none)
+         */
+        const getTier = job => {
+            // Calculate reputation tier first
+            const repReqMult = backdoored ? 0.75 : 1;
+            let reqRepTier = 0;
+            while (reqRepTier < job.reqRep.length && job.reqRep[reqRepTier] * repReqMult <= currentReputation) reqRepTier++;
+            
+            // Early return if no reputation requirements met
+            if (reqRepTier === 0) return -1;
+            
+            // Check stat requirements efficiently - return first failing tier
+            const checkStat = (reqArray, playerStat) => {
+                if (!reqArray || reqArray.length === 0) return reqRepTier;
+                for (let i = 0; i < Math.min(reqRepTier, reqArray.length); i++) {
+                    const req = reqArray[i] === 0 ? 0 : reqArray[i] + statModifier;
+                    if (req > playerStat) return i;
+                }
+                return reqRepTier;
+            };
+            
+            // Find the most limiting stat requirement using cached skills
+            const hackTier = checkStat(job.reqHck, currentSkills.hacking);
+            const strTier = checkStat(job.reqStr, currentSkills.strength);
+            const chaTier = checkStat(job.reqCha, currentSkills.charisma);
+            const defTier = checkStat(job.reqDef, currentSkills.defense);
+            const dexTier = checkStat(job.reqDex, currentSkills.dexterity);
+            const agiTier = checkStat(job.reqAgi, currentSkills.agility);
+            
+            return Math.min(reqRepTier, hackTier, strTier, chaTier, defTier, dexTier, agiTier) - 1;
+        };
         // It's generally best to hop back-and-forth between it and software engineer career paths (rep gain is about the same, but better money from software)
         const qualifyingItTier = getTier(itJob), qualifyingSoftwareTier = getTier(softwareJob);
         const bestHackJobTier = Math.max(qualifyingItTier, qualifyingSoftwareTier);
@@ -1192,9 +1218,12 @@ export async function workForMegacorpFactionInvite(ns, factionName, waitForInvit
         // Also try Security field -- uses combat stats, can be better for players with high str/def/dex/agi
         // We can't easily compute Security tiers from stats (different formula), so try applying and measure rep rate
         let bestRoleName = bestHackRoleName, bestJobTier = bestHackJobTier;
+        
+        // Cache player skills once per loop to avoid repeated API calls
+        const playerInfo = await getPlayerInfo(ns);
+        const currentSkills = playerInfo.skills;
+        
         if (currentJobTier < bestJobTier || currentRole != bestRoleName) { // We are ready for a promotion, ask for one!
-            // Cache player info to reduce API calls
-            const playerInfo = await getPlayerInfo(ns);
             // Try the best hacking role first
             const hackResult = await tryApplyToCompany(ns, companyName, bestHackRoleName);
             // Also try Security to see if it gives a better position (combat-stat-heavy players benefit)
@@ -1203,20 +1232,27 @@ export async function workForMegacorpFactionInvite(ns, factionName, waitForInvit
             const secJob = (await getPlayerInfo(ns)).jobs[companyName];
             if (secResult && secJob !== priorJob) {
                 // Security gave us a new position -- measure which is better by trying both and comparing rep
-                // For now, start working Security and measure; we'll switch back if hacking role is better
-                await getNsDataThroughFile(ns, `ns.singularity.workForCompany(ns.args[0], ns.args[1])`, null, [companyName, false]);
-                const secRepRate = await measureCompanyRepGainRate(ns, companyName);
-                // Switch back to hacking role and measure
-                await tryApplyToCompany(ns, companyName, bestHackRoleName);
-                await getNsDataThroughFile(ns, `ns.singularity.workForCompany(ns.args[0], ns.args[1])`, null, [companyName, false]);
-                const hackRepRate = await measureCompanyRepGainRate(ns, companyName);
-                if (secRepRate > hackRepRate * 1.05) { // Security must be >5% better to justify switching
-                    await tryApplyToCompany(ns, companyName, "Security");
-                    bestRoleName = "Security";
-                    bestJobTier = Math.max(bestHackJobTier, getTier(jobs.find(j => j.name === "Security"))); // Update job tier for Security
-                    log(ns, `SUCCESS: Applied to "${companyName}" as Security (${secRepRate.toFixed(2)} rep/s > ${hackRepRate.toFixed(2)} rep/s for ${bestHackRoleName})`, false, 'success');
-                } else {
-                    log(ns, `Successfully applied to "${companyName}" for a '${bestHackRoleName}' Job or Promotion`, false, 'success');
+                try {
+                    // For now, start working Security and measure; we'll switch back if hacking role is better
+                    await getNsDataThroughFile(ns, `ns.singularity.workForCompany(ns.args[0], ns.args[1])`, null, [companyName, false]);
+                    const secRepRate = await measureCompanyRepGainRate(ns, companyName);
+                    // Switch back to hacking role and measure
+                    await tryApplyToCompany(ns, companyName, bestHackRoleName);
+                    await getNsDataThroughFile(ns, `ns.singularity.workForCompany(ns.args[0], ns.args[1])`, null, [companyName, false]);
+                    const hackRepRate = await measureCompanyRepGainRate(ns, companyName);
+                    
+                    if (secRepRate > hackRepRate * 1.05) { // Security must be >5% better to justify switching
+                        await tryApplyToCompany(ns, companyName, "Security");
+                        bestRoleName = "Security";
+                        bestJobTier = Math.max(bestHackJobTier, getTier(jobs.find(j => j.name === "Security"))); // Update job tier for Security
+                        log(ns, `SUCCESS: Applied to "${companyName}" as Security (${secRepRate.toFixed(2)} rep/s > ${hackRepRate.toFixed(2)} rep/s for ${bestHackRoleName})`, false, 'success');
+                    } else {
+                        log(ns, `Successfully applied to "${companyName}" for a '${bestHackRoleName}' Job or Promotion`, false, 'success');
+                    }
+                } catch (error) {
+                    log(ns, `WARNING: Error during rep rate comparison: ${error.message}. Defaulting to ${bestHackRoleName}.`, false, 'warning');
+                    // Ensure we're back to the hacking role if something went wrong
+                    await tryApplyToCompany(ns, companyName, bestHackRoleName);
                 }
             } else if (hackResult) {
                 log(ns, `Successfully applied to "${companyName}" for a '${bestHackRoleName}' Job or Promotion`, false, 'success');

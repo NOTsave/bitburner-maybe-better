@@ -6,6 +6,13 @@ import {
     getFnRunViaNsExec, tail, autoRetry, getErrorInfo
 } from './helpers.js'
 
+// Cache frequently used functions to reduce property access
+const fmtMoney = formatMoney;
+const fmtRam = formatRam;
+const fmtDuration = formatDuration;
+const fmtNumber = formatNumber;
+const fmtNumberShort = formatNumberShort;
+
 // daemon.js has histocially been the central orchestrator of almost every script in the game.
 // Only recently has it been "indentured" to an even higher-level orchestrator: autopilot.js
 // Its primary job is to manage hacking servers for income, but it also manages launching
@@ -162,12 +169,18 @@ export async function main(ns) {
     let lastShareTime = 0; // Tracks when share was last invoked so we can respect the configured share-cooldown
     let allTargetsPrepped = false;
 
-    /** Ram-dodge getting updated player info.
+    /** Ram-dodge getting updated player info with caching.
      * @param {NS} ns
      * @returns {Promise<Player>} */
+    let lastPlayerUpdate = 0;
     async function getPlayerInfo(ns) {
-        // return _cachedPlayerInfo = ns.getPlayer();
-        return _cachedPlayerInfo = await getNsDataThroughFile(ns, `ns.getPlayer()`);
+        const now = Date.now();
+        if (_cachedPlayerInfo && (now - lastPlayerUpdate) < 1000) { // Cache for 1 second
+            return _cachedPlayerInfo;
+        }
+        _cachedPlayerInfo = await getNsDataThroughFile(ns, `ns.getPlayer()`);
+        lastPlayerUpdate = now;
+        return _cachedPlayerInfo;
     }
 
     function playerHackSkill() { return _cachedPlayerInfo.skills.hacking; }
