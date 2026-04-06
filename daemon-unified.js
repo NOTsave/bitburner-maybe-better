@@ -16,8 +16,8 @@
 import {
     formatMoney, formatRam, formatDuration, formatDateTime, formatNumber, formatNumberShort,
     hashCode, disableLogs, log, getFilePath, getConfiguration,
-    getNsDataThroughFile_Custom, runCommand_Custom, waitForProcessToComplete_Custom,
-    tryGetBitNodeMultipliers_Custom, getActiveSourceFiles_Custom,
+    getNsDataThroughFile, runCommand, waitForProcessToComplete,
+    tryGetBitNodeMultipliers, getActiveSourceFiles,
     getFnRunViaNsExec, tail, autoRetry, getErrorInfo
 } from './helpers.js'
 
