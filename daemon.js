@@ -449,6 +449,7 @@ export async function main(ns) {
 
         await buildToolkit(ns, [...asynchronousHelpers, ...periodicScripts, ...hackTools]); // build toolkit
         await buildServerList(ns, false); // create the exhaustive server list
+        await getStaticServerData(ns); // gather static server data
 
         // If we ascended less than 10 minutes ago, start with some study and/or XP cycles to quickly restore hack XP
         const timeSinceLastAug = Date.now() - resetInfo.lastAugReset;
@@ -1011,6 +1012,7 @@ export async function main(ns) {
     /** Gathers up arrays of server data via external request to have the data written to disk.
      * This data should only need to be gathered once per run, as it never changes
      * @param {NS} ns */
+    async function getStaticServerData(ns) {
         if (verbose) log(ns, `getStaticServerData: ${allHostNames}`);
         dictServerRequiredHackingLevels = await getServersDict(ns, 'getServerRequiredHackingLevel');
         dictServerNumPortsRequired = await getServersDict(ns, 'getServerNumPortsRequired');
