@@ -195,8 +195,8 @@ export async function main(ns) {
         const cacheKey = 'allServers';
         if (!force) {
             const cached = serverCache.get(cacheKey);
-            if (cached) {
-                allHostNames = cached.hostnames;
+            if (cached && cached.servers) {
+                allHostNames = cached.hostnames || [];
                 _allServers = cached.servers;
                 return cached;
             }
@@ -263,7 +263,10 @@ export async function main(ns) {
         // Limit to fewer targets for RAM efficiency
         const maxTargets = Math.min(5, Math.floor(availableRAM / 16)); // Conservative target limit
         
-        for (const server of _allServers) {
+        // Ensure _allServers is an array
+        const servers = Array.isArray(_allServers) ? _allServers : [];
+        
+        for (const server of servers) {
             if (targets.length >= maxTargets) break;
             
             // Quick filter - only hackable servers with money
