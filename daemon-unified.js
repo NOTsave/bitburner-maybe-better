@@ -270,10 +270,19 @@ export async function main(ns) {
         
         // Debug logging
         if (verbose) {
-            log(ns, `DEBUG: _allServers type: ${typeof _allServers}, isArray: ${Array.isArray(_allServers)}, length: ${servers.length}`, false, 'info');
+            log(ns, `DEBUG: getOptimalTargets called`, false, 'info');
+            log(ns, `DEBUG: _allServers type: ${typeof _allServers}`, false, 'info');
+            log(ns, `DEBUG: _allServers isArray: ${Array.isArray(_allServers)}`, false, 'info');
+            log(ns, `DEBUG: _allServers value: ${JSON.stringify(_allServers)}`, false, 'info');
+            log(ns, `DEBUG: servers type: ${typeof servers}`, false, 'info');
+            log(ns, `DEBUG: servers isArray: ${Array.isArray(servers)}`, false, 'info');
+            log(ns, `DEBUG: servers length: ${servers.length}`, false, 'info');
         }
         
         for (const server of servers) {
+            if (verbose) {
+                log(ns, `DEBUG: Processing server: ${JSON.stringify(server)}`, false, 'info');
+            }
             if (targets.length >= maxTargets) break;
             
             // Quick filter - only hackable servers with money
@@ -346,7 +355,7 @@ export async function main(ns) {
         stockMode = (options.s || options['stock-manipulation'] || options['stock-manipulation-focus']) && !options['disable-stock-manipulation'];
         stockFocus = options['stock-manipulation-focus'] && !options['disable-stock-manipulation'];
         useHacknetNodes = options.n || options['use-hacknet-nodes'] || options['use-hacknet-servers'];
-        verbose = options.v || options['verbose'];
+        verbose = true;
         runOnce = options.o || options['run-once'];
         loopingMode = options['looping-mode'];
         recoveryThreadPadding = options['recovery-thread-padding'];
@@ -403,29 +412,58 @@ export async function main(ns) {
     async function mainLoop(ns) {
         const loopStart = Date.now();
         
+        if (verbose) {
+            log(ns, `DEBUG: Starting main loop ${loopCount}`, false, 'info');
+        }
+        
         try {
             // Very infrequent updates for RAM efficiency
             if (loopCount % 10 === 0) { // Every 10 loops
+                if (verbose) {
+                    log(ns, `DEBUG: Updating player info (loop ${loopCount})`, false, 'info');
+                }
                 await getPlayerInfo(ns);
+                if (verbose) {
+                    log(ns, `DEBUG: Player info updated, hack skill: ${_cachedPlayerInfo?.skills?.hacking}`, false, 'info');
+                }
             }
             
             if (loopCount % 20 === 0) { // Every 20 loops
-                const targets = getOptimalTargets(_cachedPlayerInfo?.skills?.hacking || 1, ns.getServerMaxRam('home') - homeReservedRam);
-                // Minimal status update
-                if (loopCount % 100 === 0) { // Every 100 loops
-                    const ramUsage = ns.getServerUsedRam('home');
-                    const ramMax = ns.getServerMaxRam('home');
-                    const utilization = ramUsage / ramMax;
-                    
-                    ns.print(`Unified Daemon: ${targets.length} targets, RAM: ${fmtRam(ramUsage)}/${fmtRam(ramMax)} (${(utilization * 100).toFixed(1)}%)`);
+                try {
+                    if (verbose) {
+                        log(ns, `DEBUG: Getting optimal targets (loop ${loopCount})`, false, 'info');
+                        log(ns, `DEBUG: _allServers type: ${typeof _allServers}, isArray: ${Array.isArray(_allServers)}`, false, 'info');
+                        log(ns, `DEBUG: _allServers length: ${_allServers?.length || 'undefined'}`, false, 'info');
+                    }
+                    const targets = getOptimalTargets(_cachedPlayerInfo?.skills?.hacking || 1, ns.getServerMaxRam('home') - homeReservedRam);
+                    if (verbose) {
+                        log(ns, `DEBUG: Got ${targets.length} targets`, false, 'info');
+                    }
+                    // Minimal status update
+                    if (loopCount % 100 === 0) { // Every 100 loops
+                        const ramUsage = ns.getServerUsedRam('home');
+                        const ramMax = ns.getServerMaxRam('home');
+                        const utilization = ramUsage / ramMax;
+                        
+                        ns.print(`Unified Daemon: ${targets.length} targets, RAM: ${fmtRam(ramUsage)}/${fmtRam(ramMax)} (${(utilization * 100).toFixed(1)}%)`);
+                    }
+                } catch (targetError) {
+                    log(ns, `ERROR: Target selection error: ${targetError.message}`, false, 'error');
+                    log(ns, `ERROR: Target stack: ${targetError.stack}`, false, 'error');
                 }
             }
             
             // Aggressive cache cleanup
             if (loopCount % 50 === 0) { // Every 50 loops
+                if (verbose) {
+                    log(ns, `DEBUG: Running cache cleanup (loop ${loopCount})`, false, 'info');
+                }
                 playerCache.cleanup();
                 serverCache.cleanup();
                 targetCache.cleanup();
+                if (verbose) {
+                    log(ns, `DEBUG: Cache cleanup completed`, false, 'info');
+                }
             }
             
         } catch (error) {
