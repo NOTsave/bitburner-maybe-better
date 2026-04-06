@@ -4,7 +4,38 @@ import {
 
 // RAM-dodging wrapper functions
 async function cc(ns, command, args = []) {
-    return await getNsDataThroughFile(ns, command, `/Temp/watchdog-${Date.now()}.txt`, args);
+    return await getNsDataThroughFile(ns, command, '/Temp/corp-watchdog-data.txt', args);
+}
+
+// Helper functions moved before main loop for better structure
+async function checkAndRestartCorp(ns, restartAttempts, maxRestartAttempts) {
+    const runningScripts = await cc(ns, 'ns.ps(ns.args[0])', ["home"]);
+    const corpRunning = runningScripts.find(s => s.filename.includes('corp.js'));
+    
+    if (!corpRunning) {
+        return await restartCorp(ns, restartAttempts, maxRestartAttempts);
+    }
+    return restartAttempts;
+}
+
+async function restartCorp(ns, restartAttempts, maxRestartAttempts) {
+    if (restartAttempts >= maxRestartAttempts) {
+        log(ns, `ERROR: Max restart attempts (${maxRestartAttempts}) reached. Giving up.`, true, 'error');
+        return restartAttempts;
+    }
+
+    const newAttempts = restartAttempts + 1;
+    log(ns, `INFO: Restarting corp.js (attempt ${newAttempts}/${maxRestartAttempts})...`, false, 'info');
+    
+    const pid = ns.run('corp.js', 1);
+    if (pid > 0) {
+        log(ns, `SUCCESS: Restarted corp.js with pid ${pid}`, true, 'success');
+        await ns.sleep(5000); // Give it time to start
+        return 0; // Reset counter on successful restart
+    } else {
+        log(ns, `ERROR: Failed to restart corp.js`, true, 'error');
+        return newAttempts;
+    }
 }
 
 /** @param {NS} ns */
@@ -29,7 +60,7 @@ export async function main(ns) {
             const protectionData = ns.read('Temp/corp-protection.txt');
             if (!protectionData) {
                 log(ns, 'WARNING: corp.js protection file not found, checking if corp.js is running...', false, 'warning');
-                await checkAndRestartCorp(ns);
+                restartAttempts = await checkAndRestartCorp(ns, restartAttempts, maxRestartAttempts);
                 continue;
             }
 
@@ -38,7 +69,7 @@ export async function main(ns) {
                 protection = JSON.parse(protectionData);
             } catch (_) {
                 log(ns, 'ERROR: Invalid protection data, checking corp.js status...', false, 'error');
-                await checkAndRestartCorp(ns);
+                restartAttempts = await checkAndRestartCorp(ns, restartAttempts, maxRestartAttempts);
                 continue;
             }
 
@@ -47,7 +78,7 @@ export async function main(ns) {
             // If protection file hasn't been updated in 15 seconds, corp.js might be dead
             if (now - protection.lastCheck > 15000) {
                 log(ns, `WARNING: corp.js hasn't checked in for ${Math.floor((now - protection.lastCheck) / 1000)}s, checking status...`, false, 'warning');
-                await checkAndRestartCorp(ns);
+                restartAttempts = await checkAndRestartCorp(ns, restartAttempts, maxRestartAttempts);
                 continue;
             }
 
@@ -57,41 +88,12 @@ export async function main(ns) {
             
             if (!corpRunning) {
                 log(ns, `WARNING: corp.js (pid ${protection.pid}) not found in process list, restarting...`, false, 'warning');
-                await restartCorp(ns);
+                restartAttempts = await restartCorp(ns, restartAttempts, maxRestartAttempts);
             }
 
         } catch (err) {
             log(ns, `ERROR: Watchdog error: ${getErrorInfo(err)}`, false, 'error');
             await ns.sleep(30000); // Wait longer on error
         }
-    }
-
-    async function checkAndRestartCorp(ns) {
-        const runningScripts = await cc(ns, 'ns.ps(ns.args[0])', ["home"]);
-        const corpRunning = runningScripts.find(s => s.filename.includes('corp.js'));
-        
-        if (!corpRunning) {
-            await restartCorp(ns);
-        }
-    }
-
-    async function restartCorp(ns) {
-        if (restartAttempts >= maxRestartAttempts) {
-            log(ns, `ERROR: Max restart attempts (${maxRestartAttempts}) reached. Giving up.`, true, 'error');
-            return;
-        }
-
-        restartAttempts++;
-        log(ns, `INFO: Restarting corp.js (attempt ${restartAttempts}/${maxRestartAttempts})...`, false, 'info');
-        
-        const pid = ns.run('corp.js', 1);
-        if (pid > 0) {
-            log(ns, `SUCCESS: Restarted corp.js with pid ${pid}`, true, 'success');
-            restartAttempts = 0; // Reset counter on successful restart
-        } else {
-            log(ns, `ERROR: Failed to restart corp.js`, true, 'error');
-        }
-        
-        await ns.sleep(5000); // Give it time to start
     }
 }

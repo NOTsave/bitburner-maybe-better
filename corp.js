@@ -48,6 +48,7 @@ const STAFF = {
     agri1:  { Operations: 1, Engineer: 1, Business: 1, Management: 1, 'Research & Development': 1 },
     agri2:  { Operations: 3, Engineer: 2, Business: 2, Management: 2, 'Research & Development': 2 },
     tobac1: { Operations: 5, Engineer: 4, Business: 4, Management: 2, 'Research & Development': 3 },
+    tobac2: { Operations: 8, Engineer: 6, Business: 6, Management: 4, 'Research & Development': 6 }, // 30 total for expanded office
 };
 
 let options; // globální pro přístup z pomocných funkcí
@@ -103,6 +104,7 @@ export async function main(ns) {
     log(ns, '════════════════════════════════════════');
 
     let state = loadState(ns);
+    log(ns, `DEBUG: Loaded state - phase: ${state.phase}, productNum: ${state.productNum}, tobacExpanded: ${state.tobacExpanded ?? false}`);
     log(ns, `Načten stav: fáze ${state.phase}, produkt č. ${state.productNum ?? 1}`);
 
     // Start protection monitoring with error handling and cleanup
@@ -135,9 +137,13 @@ export async function main(ns) {
 
     while (state.phase < PHASE.DONE) {
         try {
+            const prevPhase = state.phase;
+            log(ns, `DEBUG: Starting phase ${prevPhase} (productNum: ${state.productNum})`);
             state = await runPhase(ns, state);
+            log(ns, `DEBUG: Completed phase ${prevPhase}, new phase: ${state.phase}`);
         } catch (err) {
             log(ns, `WARNING: Chyba ve fázi ${state.phase}: ${getErrorInfo(err)}`, false, 'warning');
+            log(ns, `DEBUG: Error details - phase: ${state.phase}, productNum: ${state.productNum}, error: ${err.message}`);
             await ns.sleep(5000);
         }
         await ns.sleep(300);
@@ -155,6 +161,14 @@ export async function main(ns) {
         log(ns, 'INFO: Cleaned up protection file', false, 'info');
     } catch (cleanupError) {
         log(ns, `WARNING: Failed to cleanup protection file: ${getErrorInfo(cleanupError)}`, false, 'warning');
+    }
+
+    // Reset state file to allow next run to start fresh
+    try {
+        ns.write(STATE_FILE, JSON.stringify({ phase: PHASE.INIT, productNum: 1 }), 'w');
+        log(ns, 'INFO: Reset state file for next run', false, 'info');
+    } catch (stateResetError) {
+        log(ns, `WARNING: Failed to reset state file: ${getErrorInfo(stateResetError)}`, false, 'warning');
     }
 
     log(ns, 'SUCCESS: corp.js dokončen!', true, 'success');
@@ -350,17 +364,38 @@ async function expandOffices(ns, div, targetSize) {
 }
 
 async function hireTo(ns, div, roleMap) {
-    const total = Object.values(roleMap).reduce((a, b) => a + b, 0);
+    const targetEmployees = Object.values(roleMap).reduce((a, b) => a + b, 0);
+    log(ns, `DEBUG: hireTo - division: ${div}, target: ${targetEmployees} employees`);
+    
     for (const city of CITIES) {
-        for (let i = 0; i < total + 5; i++) {
-            try {
-                const office = await cc(ns,
-                    'ns.corporation.getOffice(ns.args[0], ns.args[1])', [div, city]);
-                if (!office || office.employees >= total) break;
-                await tc(ns,
-                    'ns.corporation.hireEmployee(ns.args[0], ns.args[1])', [div, city]);
-            } catch (_) { break; }
-            await ns.sleep(30);
+        try {
+            const office = await cc(ns,
+                'ns.corporation.getOffice(ns.args[0], ns.args[1])', [div, city]);
+            if (!office) {
+                log(ns, `DEBUG: No office found for ${div} in ${city}`);
+                continue;
+            }
+            
+            const currentEmployees = office.numEmployees ?? office.employees ?? 0;
+            log(ns, `DEBUG: ${city} office - current: ${currentEmployees}, target: ${targetEmployees}, size: ${office.size}`);
+            
+            for (let i = currentEmployees; i < targetEmployees; i++) {
+                try {
+                    await tc(ns,
+                        'ns.corporation.hireEmployee(ns.args[0], ns.args[1])', [div, city]);
+                    if (options.verbose) {
+                        log(ns, `DEBUG: Hired employee ${i + 1}/${targetEmployees} in ${city}`);
+                    }
+                } catch (_) { 
+                    if (options.verbose) {
+                        log(ns, `DEBUG: Failed to hire employee ${i + 1} in ${city}`);
+                    }
+                    break; 
+                }
+            }
+        } catch (_) { 
+            log(ns, `DEBUG: Error getting office for ${div} in ${city}`);
+            continue; 
         }
     }
 }
@@ -458,14 +493,20 @@ async function waitForInvestOffer(ns, round, minFunds) {
         try {
             const offer = await cc(ns, 'ns.corporation.getInvestmentOffer()');
             if (offer && offer.round >= round && offer.funds >= minFunds) {
-                log(ns, `  Nabídka kola ${round}: ${formatMoney(offer.funds)}`);
+                log(ns, `SUCCESS: Investiční nabídka kola ${round}: ${formatMoney(offer.funds)}`, true, 'success');
                 return;
             }
-            if (tick % 15 === 0) {
+            if (tick % 5 === 0) { // Boost every 15 seconds instead of 30
                 const funds = offer?.funds ?? 0;
                 const pct = minFunds > 0 ? (funds / minFunds * 100).toFixed(1) : '?';
-                log(ns, `  Čekám na kolo ${round}: ${formatMoney(funds)} / ${formatMoney(minFunds)} (${pct}%)`);
+                const currentRound = offer?.round ?? 0;
+                log(ns, `  Čekám na kolo ${round} (aktuální: ${currentRound}): ${formatMoney(funds)} / ${formatMoney(minFunds)} (${pct}%)`);
+                
+                // Boost both agriculture and tobacco divisions during wait
                 await buyTeaAndParties(ns, options['div-agri']);
+                if (round >= 2) {
+                    try { await buyTeaAndParties(ns, options['div-tobac']); } catch (_) {}
+                }
             }
         } catch (_) {}
         await ns.sleep(3000);
@@ -479,20 +520,23 @@ async function buyCorpUpgrades(ns) {
         'Speech Processor Implants', 'Neural Accelerators',
         'FocusWires', 'ABC SalesBots',
     ];
-    let funds = 0;
+    
+    // Sanity check that corporation exists
     try {
-        const corp = await cc(ns, 'ns.corporation.getCorporation()');
-        funds = corp?.funds ?? 0;
+        await cc(ns, 'ns.corporation.getCorporation()');
     } catch (_) { return; }
 
     for (const upg of upgrades) {
         try {
-            const cost = await cc(ns,
-                'ns.corporation.getUpgradeLevelCost(ns.args[0])', [upg]);
-            if (cost && cost < funds * 0.05) {
+            // Buy multiple levels if we have funds, refetch funds each level
+            for (let lvl = 0; lvl < 5; lvl++) {
+                const corp = await cc(ns, 'ns.corporation.getCorporation()');
+                const funds = corp?.funds ?? 0;
+                const cost = await cc(ns, 'ns.corporation.getUpgradeLevelCost(ns.args[0])', [upg]);
+                if (!cost || cost >= funds * 0.05) break;
+                
                 await tc(ns, 'ns.corporation.levelUpgrade(ns.args[0])', [upg]);
-                funds -= cost;
-                log(ns, `  Upgrade: ${upg} (${formatMoney(cost)})`);
+                log(ns, `  Upgrade: ${upg} level ${lvl + 1} (${formatMoney(cost)})`);
             }
         } catch (_) {}
         await ns.sleep(30);
@@ -503,28 +547,35 @@ async function productLoop(ns, state) {
     const div      = options['div-tobac'];
     const homeCity = options['home-city'];
     log(ns, `INFO: Spouštím Product Loop pro ${div}...`, true, 'info');
+    log(ns, `DEBUG: productLoop - division: ${div}, homeCity: ${homeCity}, productNum: ${state.productNum}`);
 
     while (true) {
         const productName = `Cig-v${state.productNum}`;
+        log(ns, `DEBUG: Starting product development cycle ${state.productNum}: ${productName}`);
         log(ns, `\nVyvíjím: ${productName}`);
 
         let launched = false;
         for (let attempt = 0; attempt < 3 && !launched; attempt++) {
+            log(ns, `DEBUG: Product launch attempt ${attempt + 1}/3 for ${productName}`);
             try {
                 await cc(ns,
                     'ns.corporation.makeProduct(ns.args[0], ns.args[1], ns.args[2], 1e9, 1e9)',
                     [div, homeCity, productName]);
                 launched = true;
+                log(ns, `DEBUG: Successfully launched ${productName}`);
             } catch (_) {
-                const products = await tc(ns,
-                    'ns.corporation.getDivision(ns.args[0]).products', [div]);
-                if (products && products.length >= 3) {
+                log(ns, `DEBUG: Launch failed, checking products to discontinue worst one`);
+                const division = await tc(ns, 'ns.corporation.getDivision(ns.args[0])', [div]);
+                const products = division?.products ?? [];
+                log(ns, `DEBUG: Division has ${products.length} products`);
+                if (products.length >= 3) {
                     const worst = await findWorstProduct(ns, div, products);
                     if (worst) {
                         log(ns, `  Mažu: ${worst}`);
                         await tc(ns,
                             'ns.corporation.discontinueProduct(ns.args[0], ns.args[1])',
                             [div, worst]);
+                        log(ns, `DEBUG: Discontinued product ${worst}`);
                     }
                 }
                 await ns.sleep(2000);
@@ -533,24 +584,40 @@ async function productLoop(ns, state) {
 
         if (!launched) {
             log(ns, `  Vývoj selhal, zkouším za 10s...`);
+            log(ns, `DEBUG: Product launch failed for ${productName}, retrying in 10s`);
             await ns.sleep(10000);
             continue;
         }
 
+        log(ns, `DEBUG: Monitoring development progress for ${productName}`);
         let lastPct = -1;
         while (true) {
             await ns.sleep(3000);
             try {
                 const p = await cc(ns,
-                    'ns.corporation.getProduct(ns.args[0], ns.args[1])',
-                    [div, productName]);
-                if (!p || p.developmentProgress >= 99.9) break;
+                    'ns.corporation.getProduct(ns.args[0], ns.args[1], ns.args[2])',
+                    [div, options['home-city'], productName]);
+                if (!p) {
+                    log(ns, `DEBUG: Could not get product data for ${productName}`);
+                    break;
+                }
+                if (p.developmentProgress >= 99.9) {
+                    log(ns, `DEBUG: ${productName} development complete (${p.developmentProgress.toFixed(1)}%)`);
+                    break;
+                }
                 const pct = Math.floor(p.developmentProgress / 10) * 10;
-                if (pct !== lastPct) { log(ns, `  ${productName}: ${p.developmentProgress.toFixed(1)}%`); lastPct = pct; }
-            } catch (_) { break; }
+                if (pct !== lastPct) { 
+                    log(ns, `  ${productName}: ${p.developmentProgress.toFixed(1)}%`); 
+                    lastPct = pct; 
+                }
+            } catch (_) { 
+                log(ns, `DEBUG: Error monitoring ${productName} development`);
+                break; 
+            }
         }
         log(ns, `  ${productName} hotov!`);
 
+        log(ns, `DEBUG: Setting up sales for ${productName} in all cities`);
         for (const city of CITIES) {
             await tc(ns,
                 "ns.corporation.sellProduct(ns.args[0], ns.args[1], ns.args[2], 'MAX', 'MP*1', true)",
@@ -558,20 +625,29 @@ async function productLoop(ns, state) {
             await ns.sleep(20);
         }
 
+        log(ns, `DEBUG: Running tea/parties and upgrade purchases for ${productName}`);
         await buyTeaAndParties(ns, div);
         await buyCorpUpgrades(ns);
 
         try {
             const corp = await cc(ns, 'ns.corporation.getCorporation()');
-            if (corp && corp.funds > 50e9) {
+            log(ns, `DEBUG: Checking office expansion - funds: ${formatMoney(corp?.funds ?? 0)}, expanded: ${state.tobacExpanded ?? false}`);
+            if (corp && corp.funds > 50e9 && !state.tobacExpanded) {
                 await expandOffices(ns, div, 30);
-                await hireTo(ns, div, STAFF.tobac1);
-                await assignJobs(ns, div, STAFF.tobac1);
+                await hireTo(ns, div, STAFF.tobac2);
+                await assignJobs(ns, div, STAFF.tobac2);
+                state.tobacExpanded = true;
+                saveState(ns, state);
+                log(ns, 'INFO: Expanded tobacco offices to 30 employees', false, 'info');
+                log(ns, `DEBUG: Office expansion completed, saved state`);
             }
-        } catch (_) {}
+        } catch (err) {
+            log(ns, `DEBUG: Error during office expansion: ${getErrorInfo(err)}`);
+        }
 
         state.productNum++;
         saveState(ns, state);
+        log(ns, `DEBUG: Completed product cycle ${state.productNum - 1}, saved state`);
         await ns.sleep(5000);
     }
 }
@@ -579,13 +655,17 @@ async function productLoop(ns, state) {
 async function findWorstProduct(ns, div, products) {
     let worst = null;
     let worstRating = Infinity;
-    for (const name of products) {
+    
+    // Handle both string[] and object formats
+    const productNames = Array.isArray(products) ? products : Object.keys(products);
+    
+    for (const name of productNames) {
         try {
             const p = await cc(ns,
-                'ns.corporation.getProduct(ns.args[0], ns.args[1])', [div, name]);
+                'ns.corporation.getProduct(ns.args[0], ns.args[1], ns.args[2])', [div, options['home-city'], name]);
             const rating = p?.rat ?? p?.rating ?? p?.effectiveRating ?? 0;
             if (rating < worstRating) { worstRating = rating; worst = name; }
         } catch (_) {}
     }
-    return worst ?? products[0];
+    return worst ?? (Array.isArray(products) ? products[0] : Object.keys(products)[0]);
 }
