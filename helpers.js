@@ -39,6 +39,17 @@ export function parseShortNumber(text = "0") {
     return Number.NaN;
 }
 
+// Standardized timing constants
+export const TICK_RATE = 2000;
+export const TIMEOUT = 1000;
+export const CACHE_TTL = 5000;
+
+// Standardized Log Wrapper
+export function sysLog(ns, msg, type = 'info') {
+    const prefix = `[${new Date().toLocaleTimeString()}]`;
+    log(ns, `${prefix} ${msg}`, false, type);
+}
+
 /**
  * Return a number formatted with the specified number of significant figures or decimal places, whichever is more limiting.
  * @param {number} num - The number to format
@@ -957,4 +968,235 @@ export function formatTime(ns, milliseconds, milliPrecision) {
         return ns.ui.time(milliseconds, milliPrecision);
     }
     return ns.tFormat(milliseconds, milliPrecision);
+}
+
+/** @param {NS} ns 
+ * @returns {number} Current script's RAM usage */
+export function calculateRamUsage(ns) {
+    const script = ns.getRunningScript();
+    return script.ramUsage * script.threads;
+}
+
+/** @param {NS} ns 
+ * @returns {ProcessInfo[]} Array of running corp-related modules */
+export function getRunningModules(ns) {
+    return ns.ps().filter(p => 
+        p.filename.includes('corp-') && p.pid !== ns.pid
+    );
+}
+
+// Corporation Data Caching - Single Source of Truth Pattern
+// Used by corp-manager, corp-hr, corp-logistics, corp-products, corp-research, corp-stocks
+export const DEFAULT_CORP_DATA_PATH = '/Temp/corp-data.json';
+export const MAX_CACHE_SIZE = 5 * 1024 * 1024; // 5MB limit
+
+// Tiered TTL system for different data types
+const TTL_CONFIG = {
+    'corp': 10000,   // 10s (Corp data is heavy/slow)
+    'stocks': 2000,  // 2s (Stocks move fast)
+    'default': 5000  // 5s
+};
+
+// Generic Temp Path for non-corporate data
+export const GENERIC_TEMP_PATH = '/Temp/gen-';
+
+// Jittered timing to prevent IO collisions in high-load environments
+export const JITTER_BASE = 2000;
+export const JITTER_VARIANCE = 500;
+
+/** Provides a staggered sleep to prevent IO collisions */
+export const getJitteredSleep = () => JITTER_BASE + (Math.random() * JITTER_VARIANCE);
+
+/** Atomic staging for high-load environments to prevent file corruption */
+export const getAtomicPath = (baseName) => `${GENERIC_TEMP_PATH}${baseName}.json`;
+export const getTempPath = (baseName) => `${GENERIC_TEMP_PATH}${baseName}`;
+
+// Business Logic Data Paths - Standardized for Chain Architecture
+export const FACTION_DATA_PATH = '/Temp/faction-data.json';
+export const AUGMENTATION_DATA_PATH = '/Temp/augmentation-data.json';
+export const COMPANY_DATA_PATH = '/Temp/company-data.json';
+export const HACKNET_DATA_PATH = '/Temp/hacknet-data.json';
+export const GANG_DATA_PATH = '/Temp/gang-data.json';
+export const STOCK_DATA_PATH = '/Temp/stock-data.json';
+export const STOCK_PROBABILITIES_PATH = '/Temp/stock-probabilities.json';
+/**
+ * Optimized cache reader with tiered TTL system
+ * @param {NS} ns 
+ * @param {string} path 
+ * @param {string} type - Cache type for TTL selection
+ * @returns {object|null} Cached data or null if invalid/expired
+ */
+export function getCachedCorpData(ns, path = DEFAULT_CORP_DATA_PATH, type = 'corp') {
+    if (!ns.fileExists(path)) return null;
+    
+    try {
+        const content = ns.read(path);
+        
+        // Validate content is not empty or corrupted
+        if (!content || typeof content !== 'string' || content.trim().length === 0) {
+            return null;
+        }
+        
+        // Check size limits
+        if (content.length > MAX_CACHE_SIZE) {
+            log(ns, `WARN: Cache file ${path} exceeds size limit (${content.length} > ${MAX_CACHE_SIZE})`, false, 'warning');
+            return null;
+        }
+
+        const wrapper = safeParseJSON(content);
+        if (!wrapper) {
+            log(ns, `WARN: Cache file ${path} contains invalid JSON`, false, 'warning');
+            return null;
+        }
+        
+        // Ensure we are looking at our standardized wrapper format
+        if (!wrapper || typeof wrapper !== 'object' || !wrapper.payload || !wrapper.timestamp) {
+            log(ns, `WARN: Cache file ${path} has invalid wrapper format`, false, 'warning');
+            return null;
+        }
+        
+        // Validate timestamp is reasonable
+        if (typeof wrapper.timestamp !== 'number' || wrapper.timestamp <= 0) {
+            log(ns, `WARN: Cache file ${path} has invalid timestamp`, false, 'warning');
+            return null;
+        }
+        
+        const ttl = TTL_CONFIG[type] || TTL_CONFIG.default;
+        if (Date.now() - wrapper.timestamp > ttl) {
+            log(ns, `INFO: Cache file ${path} expired (${Date.now() - wrapper.timestamp}ms > ${ttl}ms)`, false, 'info');
+            return null;
+        }
+        
+        // Validate payload structure
+        if (typeof wrapper.payload !== 'object') {
+            log(ns, `WARN: Cache file ${path} has invalid payload structure`, false, 'warning');
+            return null;
+        }
+        
+        return wrapper.payload;
+    } catch (error) {
+        log(ns, `ERROR: Failed to read cache file ${path}: ${error.message || error}`, false, 'error');
+        return null;
+    }
+}
+
+
+
+/**
+ * Standardized error handling for corporation modules
+ * @param {NS} ns The nestscript instance
+ * @param {string} moduleName Name of the module where error occurred
+ * @param {Error|string} error The error that occurred
+ * @param {string} context Additional context about the operation
+ * @param {boolean} critical Whether this is a critical error that should stop execution
+ */
+export function handleCorpError(ns, moduleName, error, context = '', critical = false) {
+    checkNsInstance(ns, '"handleCorpError"');
+    const errorStr = error?.message || error || 'Unknown error';
+    const logLevel = critical ? 'error' : 'warning';
+    const message = context ? `${moduleName} ${context}: ${errorStr}` : `${moduleName}: ${errorStr}`;
+    
+    log(ns, `ERROR: ${message}`, critical, logLevel);
+    
+    // For critical errors, we might want to take additional action
+    if (critical) {
+        // Could add logic to notify admins or trigger emergency procedures
+        ns.print(`CRITICAL ERROR in ${moduleName}: ${errorStr}`);
+    }
+}
+
+/**
+ * Safe wrapper for corporation operations with standardized error handling
+ * @param {NS} ns The nestcript instance
+ * @param {string} moduleName Name of the module for error reporting
+ * @param {Function} operation The async operation to perform
+ * @param {string} context Context description for the operation
+ * @param {*} fallback Value to return if operation fails
+ * @returns {Promise<*>} Result of operation or fallback
+ */
+export async function safeCorpOperation(ns, moduleName, operation, context = '', fallback = null) {
+    try {
+        return await operation();
+    } catch (error) {
+        handleCorpError(ns, moduleName, error, context);
+        return fallback;
+    }
+}
+
+/**
+ * @param {Corporation} corp
+ * @param {string} type - e.g., 'Tobacco' or 'Agriculture'
+ * @returns {Division}
+ */
+/**
+ * Optimized for Bitburner: Basic JSON validity check to prevent script crashes
+ * @param {string} content 
+ * @returns {object|null} Parsed JSON or null if invalid
+ */
+export function safeParseJSON(content) {
+    try {
+        return JSON.parse(content);
+    } catch (e) {
+        // If file is garbled, just return null so the 
+        // calling script can wait for the next clean write.
+        return null;
+    }
+}
+
+/**
+ * Atomic file write with verification to prevent data loss
+ * @param {NS} ns The Netscript instance
+ * @param {string} path Target file path
+ * @param {object} data Data to write
+ * @returns {Promise<boolean>} Success status
+ */
+export async function safelyWriteData(ns, path, data) {
+    try {
+        // Validate input data
+        if (!data || typeof data !== 'object') {
+            throw new Error('Invalid data: must be an object');
+        }
+        
+        const wrapper = {
+            timestamp: Date.now(),
+            payload: data
+        };
+        
+        const serialized = JSON.stringify(wrapper);
+        
+        // Size validation
+        if (serialized.length > MAX_CACHE_SIZE) {
+            throw new Error(`Data too large: ${serialized.length} bytes`);
+        }
+        
+        // Atomic write: overwrite directly is safer than rm+rename in Bitburner
+        // ns.write() is atomic for existing files in the game engine
+        const success = ns.write(path, serialized, 'w');
+        
+        if (!success) {
+            throw new Error('Failed to write file');
+        }
+        
+        // Verify the write was successful
+        const verification = ns.read(path);
+        if (verification !== serialized) {
+            throw new Error('Write verification failed');
+        }
+        
+        return true;
+    } catch (error) {
+        log(ns, `ERROR: safelyWriteData failed for ${path}: ${error.message || error}`, false, 'error');
+        return false;
+    }
+}
+
+export function getDivisionByType(corp, type) {
+    if (!corp || !corp.divisions) {
+        throw new Error("Invalid Corporation object provided to helper.");
+    }
+    const div = corp.divisions.find(d => d.type === type);
+    if (!div) {
+        throw new Error(`Required division type ${type} not found in Corporation.`);
+    }
+    return div;
 }

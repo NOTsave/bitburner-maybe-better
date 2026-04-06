@@ -1,17 +1,17 @@
-import { getNsDataThroughFile, log } from './helpers.js'
+import { getNsDataThroughFile, log, formatMoney, getCachedCorpData } from './helpers.js'
 
-// Konfigurace produktového modulu
+// Product Module Configuration
 const PRODUCT_CONFIG = {
-    maxProducts: 3,              // Maximální počet produktů
-    minInvestment: 1e9,          // Minimální investice 1B
-    maxInvestment: 2e12,          // Maximální investice 2T
-    investmentPercent: 0.02,        // 2% fondů na investici
-    developmentCheckInterval: 3000,  // Kontrola každých 3s
-    sellDelay: 5000,              // Prodlev 5s po dokončení
-    profitMargin: 0.7              // Minimální profit margin pro pokračování
+    maxProducts: 3,              // Maximum 3 products
+    minInvestment: 1e9,          // Minimum investment 1B
+    maxInvestment: 2e12,          // Maximum investment 2T
+    investmentPercent: 0.02,        // 2% of funds for investment
+    developmentCheckInterval: 3000,  // Check every 3s
+    sellDelay: 5000,              // 5s delay after completion
+    profitMargin: 0.7              // Minimum profit margin to continue
 };
 
-// Cílová města pro produkty
+// Target cities for products
 const HOME_CITIES = {
     'TobacDiv': 'Sector-12',
     'AgriDiv': 'Sector-12'
@@ -22,45 +22,49 @@ async function cc(ns, cmd, args = []) {
 }
 
 export async function main(ns) {
-    log(ns, `📦 Spouštím Product Manager (max ${PRODUCT_CONFIG.maxProducts} produktů)`, false, 'info');
+    log(ns, `📦 Starting Product Manager (max ${PRODUCT_CONFIG.maxProducts} products)`, false, 'info');
     
     while (true) {
         try {
-            const corp = await cc(ns, 'ns.corporation.getCorporation()');
+            // Fix #1, #8: Use cached data instead of direct API call
+            const corp = await getCachedCorpData(ns);
             if (!corp) { await ns.sleep(10000); continue; }
 
-            // --- SPRÁVA TOBACCO PRODUKTŮ ---
+            // --- TOBACCO PRODUCTS MANAGEMENT ---
             await manageTobaccoProducts(ns, corp);
             
         } catch (e) {
-            log(ns, `📦 Produktová chyba: ${e}`, false, 'error');
+            log(ns, `📦 Product error: ${e}`, false, 'error');
         }
         
-        await ns.sleep(10000); // Produkty stačí kontrolovat každých 10s
+        await ns.sleep(10000); // Products check every 10s
     }
 }
 
 async function manageTobaccoProducts(ns, corp) {
-    const divName = 'TobacDiv';
-    const homeCity = HOME_CITIES[divName];
+    // Fix #2: Dynamic Detection - use industry type instead of hardcoded names
+    const tobaccoDiv = corp.divisions.find(d => d.type === 'Tobacco');
+    if (!tobaccoDiv) {
+        log(ns, "Tobacco division not found yet. Skipping product management.", false, 'info');
+        return;
+    }
+    
+    const homeCity = 'Sector-12'; // Default city, could be made dynamic
     
     try {
-        const division = await cc(ns, 'ns.corporation.getDivision(ns.args[0])', [divName]);
-        if (!division) return;
+        const products = tobaccoDiv.products || [];
         
-        const products = division.products || [];
+        // --- 1. MANAGE EXISTING PRODUCTS ---
+        await sellCompletedProducts(ns, tobaccoDiv.name, homeCity, products);
         
-        // --- 1. SPRÁVA STÁVAJÍCÍCH PRODUKTŮ ---
-        await sellCompletedProducts(ns, divName, homeCity, products);
+        // --- 2. DEVELOP NEW PRODUCTS ---
+        await developNewProducts(ns, corp, tobaccoDiv.name, homeCity, products);
         
-        // --- 2. VÝVOJ NOVÝCH PRODUKTŮ ---
-        await developNewProducts(ns, corp, divName, homeCity, products);
-        
-        // --- 3. SPRÁVA SKLADŮ ---
-        await manageWarehouses(ns, divName);
+        // --- 3. MANAGE WAREHOUSES ---
+        await manageWarehouses(ns, tobaccoDiv.name, corp);
         
     } catch (e) {
-        log(ns, `💥 Tobacco produktová chyba: ${e}`, false, 'error');
+        log(ns, `💥 Tobacco product error: ${e}`, false, 'error');
     }
 }
 
@@ -71,61 +75,69 @@ async function sellCompletedProducts(ns, divName, homeCity, products) {
                 [divName, homeCity, productName]);
             
             if (product && product.developmentProgress >= 100 && !product.sName) {
-                // Produkt je hotový a ještě se neprodává -> nastav prodej
+                // Product is complete and not yet selling -> set up sales
                 await cc(ns, "ns.corporation.sellProduct(ns.args[0], ns.args[1], ns.args[2], 'MAX', 'MP', true)", 
                     [divName, homeCity, productName]);
                 
-                // Aktivuj Market-TA.II pro maximální profit
+                // Activate Market-TA.II for maximum profit
                 if (await cc(ns, 'ns.corporation.hasUnlock(ns.args[0])', ['Market-TA.II'])) {
                     await cc(ns, 'ns.corporation.setProductMarketTA2(ns.args[0], ns.args[1], true)', 
                         [divName, productName]);
                 }
                 
-                log(ns, `💰 ${productName} uveden na trh (Rating: ${product.rat?.toFixed(1) || 'N/A'})`, false, 'success');
+                log(ns, `SUCCESS: ${productName} launched to market (Rating: ${product.rat?.toFixed(1) || 'N/A'})`, false, 'success');
             }
-        } catch (_) {}
+        } catch (e) {
+            // Fix Priority 1: Error logging instead of silent catch
+            log(ns, `ERROR in ${ns.getScriptName()} selling product ${productName}: ${e.message || e}`, false, 'error');
+        }
     }
 }
 
 async function developNewProducts(ns, corp, divName, homeCity, products) {
-    const incompleteProducts = products.filter(async p => {
-        try {
-            const product = await cc(ns, 'ns.corporation.getProduct(ns.args[0], ns.args[1], ns.args[2])', 
-                [divName, homeCity, p]);
-            return product && product.developmentProgress < 100;
-        } catch (_) { return true; }
-    });
+    // Fix #4: Correct Async Filtering Logic
+    const productData = await Promise.all(products.map(p => 
+        cc(ns, 'ns.corporation.getProduct(ns.args[0], ns.args[1], ns.args[2])', 
+            [divName, homeCity, p]).catch(() => ({ name: p, developmentProgress: 100 }))
+    ));
+
+    // Now filter synchronously on resolved data
+    const incompleteProducts = productData.filter(p => p.developmentProgress < 100);
+
+    if (incompleteProducts.length > 0) {
+        log(ns, `Focusing on ${incompleteProducts.length} products in development.`);
+    }
     
-    // Pokud máme méně než max produktů nebo všechny jsou hotové, vyvíjej nový
+    // If we have max products or all are complete, develop new one
     if (products.length < PRODUCT_CONFIG.maxProducts || incompleteProducts.length === 0) {
         await createNewProduct(ns, corp, divName, homeCity, products);
     } else {
-        log(ns, `📊 Vývoj probíhá (${incompleteProducts.length}/${PRODUCT_CONFIG.maxProducts} aktivních)`, false, 'info');
+        log(ns, `📊 Development in progress (${incompleteProducts.length}/${PRODUCT_CONFIG.maxProducts} active)`, false, 'info');
     }
 }
 
 async function createNewProduct(ns, corp, divName, homeCity, products) {
-    // Pokud máme max produktů, zRUŠ nejhORŠÍ
+    // If we have max products, remove worst one
     if (products.length >= PRODUCT_CONFIG.maxProducts) {
         await removeWorstProduct(ns, divName, homeCity, products);
-        await ns.sleep(2000); // Dej čas na zpracování
+        await ns.sleep(2000); // Allow time for processing
     }
     
-    // VYPOČÍT INVESTICI
+    // Calculate investment
     const investment = calculateInvestment(corp.funds);
-    const productName = `Cig-v${Date.now() % 1000}`; // Unikátní číslo
+    const productName = `Cig-v${Date.now() % 1000}`; // Unique number
     
     try {
         await cc(ns, 'ns.corporation.makeProduct(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[3])', 
             [divName, homeCity, productName, investment, investment]);
         
-        log(ns, `🚀 Vyvíjím ${productName} (Investice: ${formatMoney(investment)} - ${(investment/corp.funds*100).toFixed(1)}%)`, false, 'success');
+        log(ns, `🚀 Developing ${productName} (Investment: ${formatMoney(investment)} - ${(investment/corp.funds*100).toFixed(1)}%)`, false, 'success');
         
-        // Čekej na dokončení vývoje
+        // Fix #2: Wait for development completion
         await waitForDevelopment(ns, divName, homeCity, productName);
         
     } catch (e) {
-        log(ns, `💥 Vývoj ${productName} selhal: ${e}`, false, 'error');
+        log(ns, `ERROR in ${ns.getScriptName()} developing ${productName}: ${e.message || e}`, false, 'error');
     }
 }
 
@@ -138,7 +150,7 @@ async function removeWorstProduct(ns, divName, homeCity, products) {
             const product = await cc(ns, 'ns.corporation.getProduct(ns.args[0], ns.args[1], ns.args[2])', 
                 [divName, homeCity, productName]);
             
-            // Přeskočit produkty ve vývoji
+            // Skip products in development
             if (product && product.developmentProgress >= 100) {
                 const rating = product.rat || 0;
                 if (rating < worstRating) {
@@ -146,15 +158,20 @@ async function removeWorstProduct(ns, divName, homeCity, products) {
                     worstProduct = productName;
                 }
             }
-        } catch (_) {}
+            
+        } catch (e) {
+            // Fix #1, #4: Standardized error logging
+            log(ns, `ERROR in ${ns.getScriptName()} evaluating product ${productName}: ${e.message || e}`, false, 'error');
+        }
     }
     
     if (worstProduct) {
         try {
             await cc(ns, 'ns.corporation.discontinueProduct(ns.args[0], ns.args[1])', [divName, worstProduct]);
-            log(ns, `🗑️ Ruším ${worstProduct} (Rating: ${worstRating.toFixed(1)})`, false, 'warning');
+            log(ns, `🗑️ Discontinued worst product: ${worstProduct}`, false, 'success');
         } catch (e) {
-            log(ns, `💥 Rušení ${worstProduct} selhalo: ${e}`, false, 'error');
+            // Fix #1, #4: Standardized error logging
+            log(ns, `ERROR in ${ns.getScriptName()} discontinuing product ${worstProduct}: ${e.message || e}`, false, 'error');
         }
     }
 }
@@ -168,17 +185,17 @@ async function waitForDevelopment(ns, divName, homeCity, productName) {
                 [divName, homeCity, productName]);
             
             if (!product) {
-                log(ns, `❌ Produkt ${productName} nenalezen`, false, 'error');
+                log(ns, `ERROR: Product ${productName} not found`, false, 'error');
                 break;
             }
             
             if (product.developmentProgress >= 100) {
-                log(ns, `✅ ${productName} hotov (${product.developmentProgress.toFixed(1)}%)`, false, 'success');
+                log(ns, `SUCCESS: ${productName} complete (${product.developmentProgress.toFixed(1)}%)`, false, 'success');
                 
-                // Prodlev před nastavením prodeje
+                // Delay before setting up sales
                 await ns.sleep(PRODUCT_CONFIG.sellDelay);
                 
-                // Nastav prodej ve všech městech
+                // Set up sales in all cities
                 await setupProductSales(ns, divName, productName);
                 break;
             }
@@ -189,7 +206,9 @@ async function waitForDevelopment(ns, divName, homeCity, productName) {
                 lastPct = pct;
             }
             
-        } catch (_) {}
+        } catch (e) {
+            log(ns, `ERROR in ${ns.getScriptName()} tracking development for ${productName}: ${e.message || e}`, false, 'error');
+        }
         
         await ns.sleep(PRODUCT_CONFIG.developmentCheckInterval);
     }
@@ -201,7 +220,7 @@ async function setupProductSales(ns, divName, productName) {
             await cc(ns, "ns.corporation.sellProduct(ns.args[0], ns.args[1], ns.args[2], 'MAX', 'MP', true)", 
                 [divName, city, productName]);
             
-            // Aktivuj Market-TA pro lepší ceny
+            // Activate Market-TA for better prices
             if (await cc(ns, 'ns.corporation.hasUnlock(ns.args[0])', ['Market-TA.I'])) {
                 await cc(ns, 'ns.corporation.setMarketTA1(ns.args[0], ns.args[1], true)', [divName, productName]);
             }
@@ -210,13 +229,15 @@ async function setupProductSales(ns, divName, productName) {
                 await cc(ns, 'ns.corporation.setMarketTA2(ns.args[0], ns.args[1], true)', [divName, productName]);
             }
             
-        } catch (_) {}
+        } catch (e) {
+            log(ns, `ERROR in ${ns.getScriptName()} setting up sales for ${productName} in ${city}: ${e.message || e}`, false, 'error');
+        }
     }
 }
 
-async function manageWarehouses(ns, divName) {
+async function manageWarehouses(ns, divName, corp) {
     try {
-        const corp = await cc(ns, 'ns.corporation.getCorporation()');
+        if (!corp) corp = await getCachedCorpData(ns);
         if (!corp) return;
         
         const cities = ['Aevum', 'Chongqing', 'Sector-12', 'New Tokyo', 'Ishima', 'Volhaven'];
@@ -230,16 +251,20 @@ async function manageWarehouses(ns, divName) {
                     
                     if (corp.funds > upgradeCost * 2) {
                         await cc(ns, 'ns.corporation.upgradeWarehouse(ns.args[0], ns.args[1])', [divName, city]);
-                        log(ns, `📦 Upgrade skladu ${city} (${(warehouse.sizeUsed/warehouse.size*100).toFixed(1)}% plný)`, false, 'info');
+                        log(ns, `SUCCESS: Warehouse upgrade ${city} (${(warehouse.sizeUsed/warehouse.size*100).toFixed(1)}% full)`, false, 'info');
                     }
                 }
-            } catch (_) {}
+            } catch (e) {
+                log(ns, `ERROR in ${ns.getScriptName()} managing warehouse for ${divName}/${city}: ${e.message || e}`, false, 'error');
+            }
         }
-    } catch (_) {}
+    } catch (e) {
+        log(ns, `ERROR in ${ns.getScriptName()} managing warehouses for ${divName}: ${e.message || e}`, false, 'error');
+    }
 }
 
 function calculateInvestment(availableFunds) {
-    // Dynamická investice podle velikosti korporace
+    // Dynamic investment based on corporation size
     let investment;
     
     if (availableFunds > 1e12) { // Late game: 2% max 2T
@@ -253,10 +278,3 @@ function calculateInvestment(availableFunds) {
     return Math.max(investment, PRODUCT_CONFIG.minInvestment);
 }
 
-function formatMoney(amount) {
-    if (amount >= 1e12) return `${(amount / 1e12).toFixed(2)}T`;
-    if (amount >= 1e9) return `${(amount / 1e9).toFixed(2)}B`;
-    if (amount >= 1e6) return `${(amount / 1e6).toFixed(2)}M`;
-    if (amount >= 1e3) return `${(amount / 1e3).toFixed(2)}K`;
-    return `$${amount.toFixed(2)}`;
-}

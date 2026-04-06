@@ -130,7 +130,7 @@ async function getHudData(ns, bitNode, dictSourceFiles, options) {
 
     // Show what bitNode we're currently playing in
     {
-        const val = ["BitNode", true, `${bitNode}.${1 + (dictSourceFiles[bitNode] || 0)}`,
+        const val = ["BitNode", true, `${bitNode}.${1 + (dictSourceFiles[bitNode] ?? 0)}`,
             `Detected as being one more than your current owned SF level (${dictSourceFiles[bitNode] || 0}) in the current bitnode (${bitNode}).`]
         hudData.push(val)
     }
@@ -262,6 +262,35 @@ async function getHudData(ns, bitNode, dictSourceFiles, options) {
             val2.push(false)
         }
         hudData.push(val1, val2)
+    }
+
+    // --- Corporation Section ---
+    {
+        const val1 = ["Corp Funds"];
+        const val2 = ["Corp Rev"];
+        
+        // Check if player has access to corporation API (SourceFile 3)
+        if (3 in dictSourceFiles || bitNode == 3) {
+            const corpInfo = await getNsDataThroughFile(ns, 'ns.corporation.hasCorporation() ? ns.corporation.getCorporation() : false', '/Temp/corp-stats.txt');
+            
+            if (corpInfo) {
+                // Display corporation funds
+                val1.push(true, formatMoney(corpInfo.funds), 
+                    `Corporate Funds available for investment.\nName: ${corpInfo.name} | Tax: ${formatMoney(corpInfo.taxStats.lastTaxPayment)}`);
+                
+                // Display net revenue (revenue - expenses)
+                const revenue = corpInfo.revenue - corpInfo.expenses;
+                val2.push(true, formatMoney(revenue) + '/sec', 
+                    `Corporate Revenue per second (Net).\nGross Revenue: ${formatMoney(corpInfo.revenue)}/sec\nExpenses: ${formatMoney(corpInfo.expenses)}/sec`);
+            } else {
+                val1.push(false);
+                val2.push(false);
+            }
+        } else {
+            val1.push(false);
+            val2.push(false);
+        }
+        hudData.push(val1, val2);
     }
 
     // Show various server / RAM utilization stats

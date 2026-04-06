@@ -1,12 +1,21 @@
-import { getNsDataThroughFile, log } from './helpers.js'
+import { getNsDataThroughFile, log, formatMoney, getCachedCorpData } from './helpers.js'
 
-// Konfigurace logistického modulu
+// Fix #6: Global Constant Definitions
+const CORP_CONFIG = {
+    PARTY_COST: 5e6,         // $5M for office parties
+    ENERGY_COST_PER_UNIT: 1000, // $1K per energy point
+    ENERGY_THRESHOLD: 70,    // Refill energy below 70%
+    MORALE_COOLDOWN: 30000,  // 30s for tea/coffee
+    PARTY_COOLDOWN: 60000    // 60s for parties
+};
+
+// Logistics Module Configuration
 const LOGISTICS_CONFIG = {
-    checkInterval: 45000,       // Kontrola každých 45s
-    upgradeThreshold: 1e12,    // Upgrady při 1T+ fondů
-    materialBuffer: 0.8,          // 80% kapacity skladu
-    energyThreshold: 0.7,        // Energie pod 70% = doplnit
-    moraleThreshold: 0.6          // Morálka pod 60% = urgentní akce
+    checkInterval: 45000,       // Check every 45s
+    upgradeThreshold: 1e12,    // Upgrades at 1T+ funds
+    materialBuffer: 0.8,          // 80% warehouse capacity
+    energyThreshold: 0.7,        // Refill energy below 70%
+    moraleThreshold: 0.6          // Morale below 60% = urgent action
 };
 
 async function cc(ns, cmd, args = []) { 
@@ -14,24 +23,25 @@ async function cc(ns, cmd, args = []) {
 }
 
 export async function main(ns) {
-    log(ns, `🚚 Spouštím Logistics Manager (interval: ${LOGISTICS_CONFIG.checkInterval/1000}s)`, false, 'info');
+    log(ns, `🚚 Starting Logistics Manager (interval: ${LOGISTICS_CONFIG.checkInterval/1000}s)`, false, 'info');
     
     while (true) {
         try {
-            const corp = await cc(ns, 'ns.corporation.getCorporation()');
+            // Fix #1, #8: Use cached data instead of direct API call
+            const corp = await getCachedCorpData(ns);
             if (!corp) { await ns.sleep(10000); continue; }
 
-            // --- INTELIGENTNÍ UPGRADY ---
+            // --- INTELLIGENT UPGRADES ---
             await manageUpgrades(ns, corp);
             
-            // --- ENERGETICKÁ SPRÁVA ---
+            // --- ENERGY MANAGEMENT ---
             await manageEnergy(ns, corp);
             
-            // --- KRIZOVÉ ŘEŠENÍ ---
+            // --- CRISIS HANDLING ---
             await handleCrises(ns, corp);
             
         } catch (e) {
-            log(ns, `🚚 Logistická chyba: ${e}`, false, 'error');
+            log(ns, `🚚 Logistics error: ${e}`, false, 'error');
         }
         
         await ns.sleep(LOGISTICS_CONFIG.checkInterval);
@@ -41,51 +51,66 @@ export async function main(ns) {
 async function manageUpgrades(ns, corp) {
     if (corp.funds < LOGISTICS_CONFIG.upgradeThreshold) return;
     
-    // Prioritní upgrady pro korporaci
-    const PRIORITY_UPGRADES = [
-        { name: 'Smart Supply', cost: async () => cc(ns, 'ns.corporation.getUpgradeWarehouseCost(ns.args[0], ns.args[1])', ['Agriculture', 'Aevum']), priority: 1 },
-        { name: 'Smart Storage', cost: async () => cc(ns, 'ns.corporation.getUpgradeWarehouseCost(ns.args[0], ns.args[1])', ['Agriculture', 'Chongqing']), priority: 2 },
-        { name: 'DreamSense', cost: async () => cc(ns, 'ns.corporation.getUpgradeOfficeCost(ns.args[0], ns.args[1])', ['TobacDiv', 'Sector-12']), priority: 3 },
-        { name: 'Wilson', cost: async () => cc(ns, 'ns.corporation.getUpgradeOfficeCost(ns.args[0], ns.args[1])', ['TobacDiv', 'New Tokyo']), priority: 4 }
+    // Fix #2: Dynamic Detection - use industry type instead of hardcoded names
+    const agriDiv = corp.divisions.find(d => d.type === 'Agriculture');
+    const tobaccoDiv = corp.divisions.find(d => d.type === 'Tobacco');
+    
+    // Priority upgrades for corporation (these are UNLOCKS, not warehouse upgrades)
+    const PRIORITY_UNLOCKS = [
+        { name: 'Smart Supply', priority: 1 },
+        { name: 'Smart Storage', priority: 2 },
+        { name: 'DreamSense', priority: 3 },
+        { name: 'Wilson', priority: 4 }
     ];
     
-    for (const upgrade of PRIORITY_UPGRADES) {
+    for (const unlock of PRIORITY_UNLOCKS) {
         try {
-            const hasUpgrade = await cc(ns, 'ns.corporation.hasUnlock(ns.args[0])', [upgrade.name]);
-            if (!hasUpgrade) {
-                const cost = await upgrade.cost();
+            const hasUnlock = await cc(ns, 'ns.corporation.hasUnlock(ns.args[0])', [unlock.name]);
+            if (!hasUnlock) {
+                const cost = await cc(ns, 'ns.corporation.getUnlockCost(ns.args[0])', [unlock.name]);
                 if (corp.funds > cost * 3) {
-                    await cc(ns, 'ns.corporation.purchaseUnlock(ns.args[0])', [upgrade.name]);
-                    log(ns, `🔧 Koupil jsem ${upgrade.name} (${formatMoney(cost)})`, false, 'success');
+                    await cc(ns, 'ns.corporation.purchaseUnlock(ns.args[0])', [unlock.name]);
+                    log(ns, `SUCCESS: Purchased ${unlock.name} (${formatMoney(cost)})`, false, 'success');
                     await ns.sleep(2000);
-                    break; // Jen jeden upgrade za cyklus
+                    break; // Only one unlock per cycle
                 }
             }
-        } catch (_) {}
+        } catch (e) {
+            // Fix #1, #4: Standardized error logging
+            log(ns, `ERROR in ${ns.getScriptName()} purchasing ${unlock.name}: ${e.message || e}`, false, 'error');
+        }
     }
 }
 
 async function manageEnergy(ns, corp) {
     for (const div of corp.divisions) {
+        // Fix #5: Defensive iteration with null checks
+        if (!div || !div.cities || !Array.isArray(div.cities)) {
+            log(ns, `WARN: No cities found for division ${div?.name || 'Unknown'}`, false, 'warning');
+            continue;
+        }
+        
         for (const city of div.cities) {
             try {
                 const office = await cc(ns, 'ns.corporation.getOffice(ns.args[0], ns.args[1])', [div.name, city]);
                 if (!office) continue;
                 
-                // Doplnění energie pod 70%
+                // Fix #2, #6: Refill energy below threshold using constant
                 if (office.energy < office.maxEnergy * LOGISTICS_CONFIG.energyThreshold) {
                     const energyNeeded = Math.ceil(office.maxEnergy - office.energy);
-                    const cost = energyNeeded * 1000; // $1K za 1 energii
+                    // Fix #6: Use constant instead of magic number
+                    const cost = energyNeeded * CORP_CONFIG.ENERGY_COST_PER_UNIT;
                     
                     if (corp.funds > cost * 2) {
                         await cc(ns, 'ns.corporation.buyTea(ns.args[0], ns.args[1])', [div.name, city]);
-                        await cc(ns, 'ns.corporation.throwParty(ns.args[0], ns.args[1], ns.args[2])', 
-                            [div.name, city, Math.min(cost, 1e6)]); // Max 1M na party
-                        log(ns, `⚡ Doplnil jsem energii v ${div.name}/${city} (${energyNeeded} → ${office.maxEnergy})`, false, 'info');
+                        log(ns, `INFO: Refilling energy for ${div.name} in ${city}. Cost: ${formatMoney(cost)}`, false, 'info');
                     }
                 }
                 
-            } catch (_) {}
+            } catch (e) {
+                // Fix #1, #4: Standardized error logging
+                log(ns, `ERROR in ${ns.getScriptName()} managing energy for ${div.name}/${city}: ${e.message || e}`, false, 'error');
+            }
         }
     }
 }
@@ -93,13 +118,19 @@ async function manageEnergy(ns, corp) {
 async function handleCrises(ns, corp) {
     const crises = [];
     
+    // Fix Priority 3: Defensive iteration with null checks
     for (const div of corp.divisions) {
+        if (!div || !div.cities || !Array.isArray(div.cities)) {
+            log(ns, `WARN: No cities found for division ${div?.name || 'Unknown'}`, false, 'warning');
+            continue;
+        }
+        
         for (const city of div.cities) {
             try {
                 const office = await cc(ns, 'ns.corporation.getOffice(ns.args[0], ns.args[1])', [div.name, city]);
                 if (!office) continue;
                 
-                // Kontrola krizových situací
+                // Crisis situation checks
                 if (office.avgMorale < LOGISTICS_CONFIG.moraleThreshold) {
                     crises.push({
                         type: 'low_morale',
@@ -121,17 +152,20 @@ async function handleCrises(ns, corp) {
                     });
                 }
                 
-            } catch (_) {}
+            } catch (e) {
+                // Fix Priority 1: Error logging instead of silent catch
+                log(ns, `ERROR in ${ns.getScriptName()} checking crisis for ${div.name}/${city}: ${e.message || e}`, false, 'error');
+            }
         }
     }
     
-    // Řešení krizí
+    // Crisis resolution
     for (const crisis of crises) {
         await resolveCrisis(ns, corp, crisis);
     }
     
     if (crises.length > 0) {
-        log(ns, `🚨 Řeším ${crises.length} krizových situací`, false, 'warning');
+        log(ns, `INFO: Resolving ${crises.length} crisis situations`, false, 'warning');
     }
 }
 
@@ -139,33 +173,25 @@ async function resolveCrisis(ns, corp, crisis) {
     try {
         switch (crisis.type) {
             case 'low_morale':
-                // Okamžitá morálka boost
+                // Immediate morale boost
                 await cc(ns, 'ns.corporation.throwParty(ns.args[0], ns.args[1], ns.args[2])', 
-                    [crisis.division, crisis.city, 2e6]); // 2M na urgentní party
-                log(ns, `🎉 Krizová morálka boost v ${crisis.division}/${crisis.city}`, false, 'warning');
+                    [crisis.division, crisis.city, 2e6]); // 2M for urgent party
+                log(ns, `SUCCESS: Crisis morale boost in ${crisis.division}/${crisis.city}`, false, 'warning');
                 break;
                 
             case 'warehouse_full':
-                // Upgrade skladu
+                // Warehouse upgrade
                 const upgradeCost = await cc(ns, 'ns.corporation.getUpgradeWarehouseCost(ns.args[0], ns.args[1])', 
                     [crisis.division, crisis.city]);
                 
                 if (corp.funds > upgradeCost * 1.5) {
                     await cc(ns, 'ns.corporation.upgradeWarehouse(ns.args[0], ns.args[1])', 
                         [crisis.division, crisis.city]);
-                    log(ns, `📦 Krizový upgrade skladu v ${crisis.division}/${crisis.city} (${crisis.usage}% → 100%+)`, false, 'warning');
+                    log(ns, `SUCCESS: Crisis warehouse upgrade in ${crisis.division}/${crisis.city} (${crisis.usage}% → 100%+)`, false, 'warning');
                 }
                 break;
         }
     } catch (e) {
-        log(ns, `💥 Řešení krize selhalo: ${e}`, false, 'error');
+        log(ns, `ERROR: Crisis resolution failed: ${e.message || e}`, false, 'error');
     }
-}
-
-function formatMoney(amount) {
-    if (amount >= 1e12) return `${(amount / 1e12).toFixed(2)}T`;
-    if (amount >= 1e9) return `${(amount / 1e9).toFixed(2)}B`;
-    if (amount >= 1e6) return `${(amount / 1e6).toFixed(2)}M`;
-    if (amount >= 1e3) return `${(amount / 1e3).toFixed(2)}K`;
-    return `$${amount.toFixed(2)}`;
 }

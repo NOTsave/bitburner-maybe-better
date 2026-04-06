@@ -1,7 +1,9 @@
-import {
-    instanceCount, getConfiguration, getNsDataThroughFile, runCommand, getActiveSourceFiles, tryGetBitNodeMultipliers,
-    formatMoney, formatNumberShort, formatDuration, getStockSymbols
-} from './helpers.js'
+import { 
+    log, getConfiguration, instanceCount, safelyWriteData, 
+    GENERIC_TEMP_PATH, getJitteredSleep 
+} from './helpers.js';
+
+const STOCKS_CACHE_PATH = `${GENERIC_TEMP_PATH}stocks.json`;
 
 let disableShorts = false;
 let commission = 100000; // Buy/sell commission. Expected profit must exceed this to buy anything.
@@ -98,10 +100,10 @@ export async function main(ns) {
     disableShorts = options['disable-shorts'];
     const pre4sBuyThresholdProbability = options['pre-4s-buy-threshold-probability'];
     const pre4sMinBlackoutWindow = options['pre-4s-min-blackout-window'] || 1;
-    const pre4sMinHoldTime = options['pre-4s-minimum-hold-time'] || 0;
-    minTickHistory = options['pre-4s-min-tick-history'] || 21;
-    nearTermForecastWindowLength = options['pre-4s-inversion-detection-window'] || 10;
-    longTermForecastWindowLength = options['pre-4s-forecast-window'] || (marketCycleLength + 1);
+    const pre4sMinHoldTime = options['pre-4s-minimum-hold-time'] ?? 0;
+    minTickHistory = options['pre-4s-min-tick-history'] ?? 21;
+    nearTermForecastWindowLength = options['pre-4s-inversion-detection-window'] ?? 10;
+    longTermForecastWindowLength = options['pre-4s-forecast-window'] ?? (marketCycleLength + 1);
     showMarketSummary = options['show-pre-4s-forecast'] || options['show-market-summary'];
     // Other global values must be reset at start lest they be left in memory from a prior run
     lastTick = 0, totalProfit = 0, lastLog = "", marketCycleDetected = false, detectedCycleTick = 0, inversionAgreementThreshold = 6;
@@ -115,17 +117,26 @@ export async function main(ns) {
         let success = false;
         log(ns, `INFO: You are missing stock market API access. (NOTE: This is granted for free once you have SF8). ` +
             `Waiting until we have the 5b needed to buy it. (Run with --disable-purchase-tix-api to disable this feature.)`, true);
-        do {
-            await ns.sleep(sleepInterval);
+        while (true) {
             try {
-                const reserve = options['reserve'] != null ? options['reserve'] : Number(ns.read("reserve.txt") || 0);
-                player = await getPlayerInfo(ns);
-                success = await tryGetStockMarketAccess(ns, player.money - reserve);
+                const stockData = await gatherMarketData(ns);
+                
+                // Fix: Implement the Wrapper Contract { timestamp, payload }
+                const wrappedData = {
+                    timestamp: Date.now(),
+                    payload: stockData
+                };
+
+                // Fix: Atomic write to standardized path
+                await safelyWriteData(ns, STOCKS_CACHE_PATH, wrappedData);
+                
             } catch (err) {
-                log(ns, `WARNING: stockmaster.js Caught (and suppressed) an unexpected error while waiting to buy stock market access:\n` +
-                    (typeof err === 'string' ? err : err.message || JSON.stringify(err)), false, 'warning');
+                log(ns, `WARNING: Stock update failed: ${err}`, false, 'warning');
             }
-        } while (!success);
+
+            // Fix: Use Jittered Sleep to prevent IO pile-ups
+            await ns.sleep(getJitteredSleep());
+        }
     }
 
     const effectiveSourceFiles = await getActiveSourceFiles(ns, true); // Find out what source files the user has unlocked
@@ -154,7 +165,7 @@ export async function main(ns) {
     while (true) {
         try {
             const playerStats = await getPlayerInfo(ns);
-            const reserve = options['reserve'] != null ? options['reserve'] : Number(ns.read("reserve.txt") || 0);
+            const reserve = options['reserve'] != null ? options['reserve'] : Number(ns.read("reserve.txt") ?? 0);
             // Check whether we have 4s access yes (once we do, we can stop checking)
             if (pre4s) pre4s = !(await checkAccess(ns, "has4SDataTixApi"));
             const holdings = await refresh(ns, !pre4s, allStocks, myStocks); // Returns total stock value
@@ -332,10 +343,10 @@ async function refresh(ns, has4s, allStocks, myStocks) {
         // Update our current portfolio of owned stock
         let [priorLong, priorShort] = [stk.sharesLong, stk.sharesShort];
         stk.position = mock ? null : dictPositions[sym];
-        stk.sharesLong = mock ? (stk.sharesLong || 0) : stk.position[0];
-        stk.boughtPrice = mock ? (stk.boughtPrice || 0) : stk.position[1];
-        stk.sharesShort = mock ? (stk.shares_short || 0) : stk.position[2];
-        stk.boughtPriceShort = mock ? (stk.boughtPrice_short || 0) : stk.position[3];
+        stk.sharesLong = mock ? (stk.sharesLong ?? 0) : stk.position[0];
+        stk.boughtPrice = mock ? (stk.boughtPrice ?? 0) : stk.position[1];
+        stk.sharesShort = mock ? (stk.shares_short ?? 0) : stk.position[2];
+        stk.boughtPriceShort = mock ? (stk.boughtPrice_short ?? 0) : stk.position[3];
         holdings += stk.positionValue();
         if (stk.owned()) myStocks.push(stk); else stk.ticksHeld = 0;
         if (ticked) // Increment ticksHeld, or reset it if we have no position in this stock or reversed our position last tick.
@@ -423,16 +434,20 @@ async function updateForecast(ns, allStocks, has4s) {
         if (showMarketSummary) await updateForecastFile(ns, summary); else log(ns, summary);
     }
     // Write out a file of stock probabilities so that other scripts can make use of this (e.g. hack orchestrator can manipulate the stock market)
-    await ns.write('/Temp/stock-probabilities.txt', JSON.stringify(Object.fromEntries(
-        allStocks.map(stk => [stk.sym, { prob: stk.prob, sharesLong: stk.sharesLong, sharesShort: stk.sharesShort }]))), "w");
+    const marketData = {
+        timestamp: Date.now(),
+        payload: Object.fromEntries(
+            allStocks.map(stk => [stk.sym, { prob: stk.prob, sharesLong: stk.sharesLong, sharesShort: stk.sharesShort }]))
+    };
+    await safelyWriteData(ns, STOCK_PROBABILITIES_PATH, marketData);
 }
 
 // Helpers to display the stock market summary in a separate window.
-let summaryFile = '/Temp/stockmarket-summary.txt';
+let summaryFile = STOCK_SUMMARY_PATH;
 let updateForecastFile = async (ns, summary) => await ns.write(summaryFile, summary, 'w');
 let launchSummaryTail = async ns => {
     let summaryTailScript = summaryFile.replace('.txt', '-tail.js');
-    if (await getNsDataThroughFile(ns, `ns.scriptRunning('${summaryTailScript}', ns.getHostname())`, '/Temp/stockmarket-summary-is-running.txt'))
+    if (await getNsDataThroughFile(ns, `ns.scriptRunning('${summaryTailScript}', ns.getHostname())`, `${STOCK_SUMMARY_PATH}-is-running.txt`))
         return;
     //await getNsDataThroughFile(ns, `ns.scriptKill('${summaryTailScript}', ns.getHostname())`, summaryTailScript.replace('.js', '-kill.js')); // Only needed if we're changing the script below
     await runCommand(ns, `ns.disableLog('sleep'); tail(ns); let lastRead = '';
@@ -464,7 +479,7 @@ async function doBuy(ns, stk, sharesToBuy) {
         `${stk.maxShares == sharesToBuy + stk.ownedShares() ? '@max shares' : `${formatNumberShort(sharesToBuy + stk.ownedShares(), 3, 3).padStart(5)}/${formatNumberShort(stk.maxShares, 3, 3).padStart(5)}`}) ` +
         `${stk.sym.padEnd(5)} @ ${formatMoney(expectedPrice).padStart(9)} for ${formatMoney(sharesToBuy * expectedPrice).padStart(9)} (Spread:${(stk.spread_pct * 100).toFixed(2)}% ` +
         `ER:${formatBP(stk.expectedReturn()).padStart(8)}) Ticks to Profit: ${stk.timeToCoverTheSpread().toFixed(2)}`, noisy, 'info');
-    let price = mock ? expectedPrice : Number(await transactStock(ns, stk.sym, sharesToBuy, long ? 'buyStock' : 'buyShort'));
+    let price = mock ? expectedPrice : Number(await transactStock(ns, stk.sym, sharesToBuy, long ? 'buyStock' : 'buyShort', [stk.sym, sharesToBuy]));
     // The rest of this work is for troubleshooting / mock-mode purposes
     if (price == 0) {
         const playerMoney = (await getPlayerInfo(ns)).money;
@@ -491,7 +506,7 @@ async function doSellAll(ns, stk) {
         log(ns, `ERROR: Somehow ended up both ${stk.sharesShort} short and ${stk.sharesLong} long on ${stk.sym}`, true, 'error');
     let expectedPrice = long ? stk.bid_price : stk.ask_price; // Depends on whether we will be selling a long or short position
     let sharesSold = long ? stk.sharesLong : stk.sharesShort;
-    let price = mock ? expectedPrice : await transactStock(ns, stk.sym, sharesSold, long ? 'sellStock' : 'sellShort');
+    let price = mock ? expectedPrice : Number(await transactStock(ns, stk.sym, sharesSold, long ? 'sellStock' : 'sellShort', [stk.sym, sharesSold]));
     const profit = (long ? stk.sharesLong * (price - stk.boughtPrice) : stk.sharesShort * (stk.boughtPriceShort - price)) - 2 * commission;
     log(ns, `${profit > 0 ? 'SUCCESS' : 'WARNING'}: Sold all ${formatNumberShort(sharesSold, 3, 3).padStart(5)} ${stk.sym.padEnd(5)} ${long ? ' long' : 'short'} positions ` +
         `@ ${formatMoney(price).padStart(9)} for a ` + (profit > 0 ? `PROFIT of ${formatMoney(profit).padStart(9)}` : ` LOSS  of ${formatMoney(-profit).padStart(9)}`) + ` after ${stk.ticksHeld} ticks`,
@@ -544,8 +559,8 @@ async function liquidate(ns) {
         var [sharesLong, , sharesShort, avgShortCost] = dictPositions[sym];
         if (sharesLong + sharesShort == 0) continue;
         totalStocks++, totalSharesLong += sharesLong, totalSharesShort += sharesShort;
-        if (sharesLong > 0) totalRevenue += (await sellStockWrapper(ns, sym, sharesLong)) * sharesLong - commission;
-        if (sharesShort > 0) totalRevenue += (2 * avgShortCost - (await sellShortWrapper(ns, sym, sharesShort))) * sharesShort - commission;
+        if (sharesLong > 0) totalRevenue += (await transactStock(ns, sym, sharesLong, 'sellStock', [sym, sharesLong])) * sharesLong - commission;
+        if (sharesShort > 0) totalRevenue += (2 * avgShortCost - (await transactStock(ns, sym, sharesShort, 'sellShort', [sym, sharesShort]))) * sharesShort - commission;
     }
     log(ns, `Sold ${totalSharesLong.toLocaleString('en')} long shares and ${totalSharesShort.toLocaleString('en')} short shares ` +
         `in ${totalStocks} stocks for ${formatMoney(totalRevenue, 3)}`, true, 'success');

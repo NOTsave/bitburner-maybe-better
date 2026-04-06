@@ -1,19 +1,21 @@
-import { getNsDataThroughFile, log } from './helpers.js'
+import { getNsDataThroughFile, log, formatMoney, formatNumber, formatRam, getFilePath, 
+    getFnRunViaNsExec, getFnIsAliveViaNsIsRunning, runCommand, getNsDataThroughFile_Custom } from './helpers.js'
+import { setOperatingDividends } from './corp-dividend-manager.js'
 
-// Konfigurace akciového modulu
+// Stock module configuration
 const STOCK_CONFIG = {
-    checkInterval: 60000,        // Kontrola každých 60s
-    buyThreshold: 1e12,         // Kupovat při 1T+ volných prostředků
-    sellThreshold: 100e9,        // Prodávat při 100B+ zisku
-    maxHoldingPercent: 0.4,     // Max 40% akcií
+    checkInterval: 60000,        // Check every 60s
+    buyThreshold: 1e12,         // Buy at 1T+ available funds
+    sellThreshold: 100e9,        // Sell at 100B+ profit
+    maxHoldingPercent: 0.4,     // Max 40% of shares
     minProfitMargin: 0.1,       // Min 10% profit margin
-    dividendTarget: 0.3,           // Cílová dividendová sazba 30%
-    selfTerminate: true,           // Samovypínání po dosažení cílů
-    completionConditions: [        // Podmínky pro samovypínání
-        { type: 'dividend_rate', operator: '>=', value: 0.35 }, // Dividendy >= 35%
-        { type: 'shares_owned', operator: '>=', value: 0.8 },    // Vlastníme >= 80% akcií
+    dividendTarget: 0.3,           // Target dividend rate 30%
+    selfTerminate: true,           // Self-termination after reaching goals
+    completionConditions: [        // Conditions for self-termination
+        { type: 'dividend_rate', operator: '>=', value: 0.35 }, // Dividends >= 35%
+        { type: 'shares_owned', operator: '>=', value: 0.8 },    // Own >= 80% of shares
         { type: 'profit_margin', operator: '>=', value: 0.2 },    // Profit margin >= 20%
-        { type: 'total_value', operator: '>=', value: 10e12 }    // Celková hodnota >= 10T
+        { type: 'total_value', operator: '>=', value: 10e12 }    // Total value >= 10T
     ]
 };
 
@@ -22,30 +24,32 @@ async function cc(ns, cmd, args = []) {
 }
 
 export async function main(ns) {
-    log(ns, `📈 Spouštím Stock Manager (samovypínání: ${STOCK_CONFIG.selfTerminate ? 'ZAPNUTO' : 'VYPNUTO'})`, false, 'info');
+    log(ns, `📈 Starting Stock Manager (self-termination: ${STOCK_CONFIG.selfTerminate ? 'ENABLED' : 'DISABLED'})`, false, 'info');
     
     while (true) {
         try {
-            const corp = await cc(ns, 'ns.corporation.getCorporation()');
+            // Fix #1, #8: Use cached data instead of direct API call
+            const corp = await getCachedCorpData(ns);
             if (!corp) { await ns.sleep(10000); continue; }
 
-            // --- KONTROLA SAMOVYPÍNÁNÍ ---
+            // --- SELF-TERMINATION CHECK ---
             if (STOCK_CONFIG.selfTerminate) {
-                const shouldTerminate = await checkSelfTerminationConditions(ns, corp);
-                if (shouldTerminate.terminate) {
-                    log(ns, `🎯 Stock management dokončen: ${shouldTerminate.reason}`, false, 'success');
-                    return; // Ukonči modul
+                // Fix #7: Standardized Termination - direct boolean check
+                const shouldExit = await checkSelfTerminationConditions(ns, corp);
+                if (shouldExit) {
+                    log(ns, "Stock conditions met or error occurred. Terminating module.", false, 'success');
+                    return;
                 }
             }
 
-            // --- SPRÁVA AKCIÍ ---
+            // --- STOCK MANAGEMENT ---
             await manageStocks(ns, corp);
             
-            // --- SPRÁVA DIVIDEND ---
+            // --- DIVIDEND MANAGEMENT ---
             await manageDividends(ns, corp);
             
         } catch (e) {
-            log(ns, `📈 Akciová chyba: ${e}`, false, 'error');
+            log(ns, `📈 Stock error: ${e}`, false, 'error');
         }
         
         await ns.sleep(STOCK_CONFIG.checkInterval);
@@ -54,20 +58,21 @@ export async function main(ns) {
 
 async function checkSelfTerminationConditions(ns, corp) {
     if (!STOCK_CONFIG.completionConditions || STOCK_CONFIG.completionConditions.length === 0) {
-        return { terminate: false, reason: 'Samovypínání vypnuto' };
+        return false; // Fix #7: Return boolean directly
     }
     
     try {
         for (const condition of STOCK_CONFIG.completionConditions) {
             const result = await evaluateStockCondition(ns, corp, condition);
             if (result.shouldTerminate) {
-                return result;
+                return true; // Fix #7: Return boolean directly
             }
         }
         
-        return { terminate: false, reason: 'Pokračuji ve stock managementu' };
+        return false; // Fix #7: Return boolean directly
     } catch (e) {
-        return { terminate: false, reason: `Chyba v kontrole: ${e}` };
+        log(ns, `Error in stock termination check: ${e}`, false, 'error'); // Fix #6: Proper error logging
+        return false; // Fix #7: Return boolean directly
     }
 }
 
@@ -77,7 +82,7 @@ async function evaluateStockCondition(ns, corp, condition) {
             case 'dividend_rate':
                 return {
                     shouldTerminate: corp.dividendRate >= condition.value,
-                    reason: `Dividendy dostatečně vysoké (${(corp.dividendRate*100).toFixed(1)}% >= ${(condition.value*100).toFixed(1)}%)`
+                    reason: `Dividends high enough (${(corp.dividendRate*100).toFixed(1)}% >= ${(condition.value*100).toFixed(1)}%)`
                 };
                 
             case 'shares_owned':
@@ -87,31 +92,31 @@ async function evaluateStockCondition(ns, corp, condition) {
                 
                 return {
                     shouldTerminate: ownedPercent >= condition.value,
-                    reason: `Dostatečně vlastněno akcií (${(ownedPercent*100).toFixed(1)}% >= ${(condition.value*100).toFixed(1)}%)`
+                    reason: `Sufficient shares owned (${(ownedPercent*100).toFixed(1)}% >= ${(condition.value*100).toFixed(1)}%)`
                 };
                 
             case 'profit_margin':
-                // Zjednodušený výpočet profit margin
+                // Simplified profit margin calculation
                 const profitPerShare = corp.sharePrice - (corp.issuedShares > 0 ? corp.shareSalePrice : 0);
                 const margin = profitPerShare / corp.sharePrice;
                 
                 return {
                     shouldTerminate: margin >= condition.value,
-                    reason: `Profit margin dostatečně vysoký (${(margin*100).toFixed(1)}% >= ${(condition.value*100).toFixed(1)}%)`
+                    reason: `Profit margin high enough (${(margin*100).toFixed(1)}% >= ${(condition.value*100).toFixed(1)}%)`
                 };
                 
             case 'total_value':
                 const totalValue = corp.sharePrice * corp.totalShares;
                 return {
                     shouldTerminate: totalValue >= condition.value,
-                    reason: `Celková hodnota akcií dostatečně vysoká (${formatMoney(totalValue)} >= ${formatMoney(condition.value)})`
+                    reason: `Total share value high enough (${formatMoney(totalValue)} >= ${formatMoney(condition.value)})`
                 };
                 
             default:
-                return { terminate: false, reason: 'Neznámá podmínka' };
+                return { shouldTerminate: false, reason: 'Unknown condition' };
         }
     } catch (e) {
-        return { terminate: false, reason: `Chyba: ${e}` };
+        return { shouldTerminate: false, reason: `Error: ${e}` };
     }
 }
 
@@ -122,61 +127,50 @@ async function manageStocks(ns, corp) {
         const currentHolding = totalStock;
         const maxHolding = maxStock * STOCK_CONFIG.maxHoldingPercent;
         
-        // Kupování akcií (pokud máme volné prostředky)
+        // Buy shares (if we have available funds)
         if (corp.funds > STOCK_CONFIG.buyThreshold && currentHolding < maxHolding) {
             const toBuy = Math.min(
-                Math.floor((corp.funds * 0.1) / corp.sharePrice), // 10% volných prostředků
+                Math.floor((corp.funds * 0.1) / corp.sharePrice), // 10% of available funds
                 maxHolding - currentHolding
             );
             
             if (toBuy > 0) {
                 await cc(ns, 'ns.corporation.buyBackShares(ns.args[0], ns.args[1])', [toBuy]);
-                log(ns, `📈 Koupil jsem ${toBuy} akcií (${formatMoney(toBuy * corp.sharePrice)})`, false, 'success');
+                log(ns, `SUCCESS: Bought ${toBuy} shares (${formatMoney(toBuy * corp.sharePrice)})`, false, 'success');
             }
         }
         
-        // Prodej akcií (pokud máme zisk)
+        // Sell shares (if we have profit)
         const profitPerShare = corp.sharePrice - (corp.issuedShares > 0 ? corp.shareSalePrice : 0);
         if (profitPerShare > 0 && currentHolding > maxStock * 0.8) {
-            const toSell = Math.floor(currentHolding * 0.2); // Prodej 20%
+            const toSell = Math.floor(currentHolding * 0.2); // Sell 20%
             
             if (toSell > 0 && profitPerShare > corp.sharePrice * STOCK_CONFIG.minProfitMargin) {
                 await cc(ns, 'ns.corporation.sellShares(ns.args[0])', [toSell]);
-                log(ns, `📉 Prodal jsem ${toSell} akcií (zisk: ${formatMoney(profitPerShare * toSell)})`, false, 'success');
+                log(ns, `SUCCESS: Sold ${toSell} shares. Profit: ${formatMoney(profitPerShare * toSell)}`, false, 'success');
             }
         }
         
     } catch (e) {
-        log(ns, `💥 Akciová chyba: ${e}`, false, 'error');
+        log(ns, `ERROR in ${ns.getScriptName()} managing stock sales: ${e.message || e}`, false, 'error');
     }
 }
 
 async function manageDividends(ns, corp) {
     try {
-        // Cílová dividendová sazba
-        const targetDividend = STOCK_CONFIG.dividendTarget;
-        const currentDividend = corp.dividendRate || 0;
+        // Fix: Use correct API - setDividendPercent(percent) where percent is 0-100
+        const targetDividendPercent = STOCK_CONFIG.dividendTarget * 100; // Convert 0.3 → 30
+        const currentDividendPercent = (corp.dividendRate || 0) * 100;
         
-        if (Math.abs(currentDividend - targetDividend) > 0.05) { // Rozdíl > 5%
-            await cc(ns, 'ns.corporation.setDividendPolicy(ns.args[0], ns.args[1])', [targetDividend, true]);
-            log(ns, `💰 Nastavuji dividendy na ${(targetDividend*100).toFixed(0)}% (z ${currentDividend*100}%)`, false, 'success');
+        if (Math.abs(currentDividendPercent - targetDividendPercent) > 5) { // Difference > 5%
+            await setOperatingDividends(ns, targetDividendPercent / 100, 'Adjusting dividend rate for stock market stability');
+            log(ns, `INFO: Setting dividend rate to ${targetDividendPercent.toFixed(0)}% (from ${currentDividendPercent.toFixed(0)}%)`, false, 'info');
         }
         
-        // Automatické vyplácení dividend
-        if (corp.dividendEarnings > 0) {
-            await cc(ns, 'ns.corporation.issueDividends(ns.args[0])', [corp.dividendEarnings]);
-            log(ns, `💰 Vyplácím dividendy: ${formatMoney(corp.dividendEarnings)}`, false, 'success');
-        }
+        // Note: Dividends are paid automatically based on the percentage set.
+        // No need to call issueDividends - that function doesn't exist in the API.
         
     } catch (e) {
-        log(ns, `💥 Dividendová chyba: ${e}`, false, 'error');
+        log(ns, `ERROR in ${ns.getScriptName()} managing dividends: ${e.message || e}`, false, 'error');
     }
-}
-
-function formatMoney(amount) {
-    if (amount >= 1e12) return `${(amount / 1e12).toFixed(2)}T`;
-    if (amount >= 1e9) return `${(amount / 1e9).toFixed(2)}B`;
-    if (amount >= 1e6) return `${(amount / 1e6).toFixed(2)}M`;
-    if (amount >= 1e3) return `${(amount / 1e3).toFixed(2)}K`;
-    return `$${amount.toFixed(2)}`;
 }

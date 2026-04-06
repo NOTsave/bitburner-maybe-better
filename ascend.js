@@ -1,6 +1,7 @@
 import {
-    log, getConfiguration, getFilePath, runCommand, waitForProcessToComplete, getNsDataThroughFile,
-    getActiveSourceFiles, getStockSymbols
+    log, getConfiguration, instanceCount, getNsDataThroughFile, runCommand, waitForProcessToComplete,
+    getActiveSourceFiles, tryGetBitNodeMultipliers, getStocksValue, unEscapeArrayArgs,
+    formatMoney, formatDuration, formatNumber, getErrorInfo, tail, jsonReplacer, getFilePath, DEFAULT_CORP_DATA_PATH, getCachedCorpData, maximizeDividends, TIMEOUT
 } from './helpers.js'
 
 const argsSchema = [
@@ -159,6 +160,19 @@ export async function main(ns) {
     if (invites.length > 0) {
         pid = await runCommand(ns, 'ns.args.forEach(f => ns.singularity.joinFaction(f))', '/Temp/join-factions.js', invites);
         await waitForProcessToComplete(ns, pid, true);
+    }
+
+    // STEP 9.5: Ensure corporation dividends are at 100% to capture final payouts
+    // (autopilot.js should have already done this, but we ensure it here as a safeguard)
+    try {
+        const hasCorp = await getNsDataThroughFile(ns, 'ns.corporation.hasCorporation()');
+        if (hasCorp) {
+            log(ns, 'Finalizing Corporation payouts...', false, 'info');
+            await maximizeDividends(ns, 'Final ascension payout - ensuring maximum dividend capture');
+            await ns.sleep(TIMEOUT); // Use standardized timeout constant
+        }
+    } catch {
+        // No corporation or API error - continue without blocking
     }
 
     // STEP 10: WAIT: For money to stop decreasing, so we know that external scripts have bought what they could.
