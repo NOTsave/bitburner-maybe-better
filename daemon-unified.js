@@ -263,7 +263,7 @@ export async function main(ns) {
         // Limit to fewer targets for RAM efficiency
         const maxTargets = Math.min(5, Math.floor(availableRAM / 16)); // Conservative target limit
         
-        for (const [hostname, server] of _allServers) {
+        for (const server of _allServers) {
             if (targets.length >= maxTargets) break;
             
             // Quick filter - only hackable servers with money
@@ -275,7 +275,7 @@ export async function main(ns) {
                 // Simple priority calculation
                 const priority = Math.log(server.moneyMax + 1) - server.hackDifficulty;
                 
-                targets.push({ hostname, server, priority });
+                targets.push({ hostname: server.hostname, server, priority });
             }
         }
 
