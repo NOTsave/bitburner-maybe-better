@@ -6,7 +6,7 @@ import {
     getErrorInfo, instanceCount, tail, jsonReplacer, getActiveSourceFiles, runCommand_Custom,
     getFnRunViaNsExec
 } from './helpers.js'
-
+//has some errors still and istn tested ... so yeah , f*** this rn  
 // Cache frequently used functions to reduce property access
 const fmtMoney = formatMoney;
 const fmtRam = formatRam;
