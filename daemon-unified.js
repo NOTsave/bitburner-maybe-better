@@ -105,6 +105,14 @@ export function autocomplete(data, args) {
 }
 
 export async function main(ns) {
+    // --- SINGLETON CHECK ---
+    const scriptName = 'daemon-unified.js';
+    const runningProcesses = ns.ps('home').filter(p => p.filename === scriptName);
+    if (runningProcesses.length > 1) {
+        log(ns, `WARNING: ${scriptName} is already running (PID: ${runningProcesses[0].pid}). Exiting this instance.`, false, 'warning');
+        return;
+    }
+    
     // --- CONSTANTS ---
     const growthThreadHardening = 0.004;
     const hackThreadHardening = 0.002;

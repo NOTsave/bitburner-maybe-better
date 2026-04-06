@@ -2,7 +2,7 @@ let options;
 const argsSchema = [
     ['github', 'NOTsave'],
     ['repository', 'bitburner-maybe-better'],
-    ['branch', 'main'],
+    ['branch', 'beta'],
     ['download', []], // By default, all supported files in the repository will be downloaded. Override with just a subset of files here
     ['new-file', []], // If a repository listing fails, only files returned by ns.ls() will be downloaded. You can add additional files to seek out here.
     ['subfolder', ''], // Can be set to download to a sub-folder that is not part of the remote repository structure
