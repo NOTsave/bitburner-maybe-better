@@ -353,7 +353,7 @@ export async function main(ns) {
             resetInfo = { currentNode: 1, lastAugReset: Date.now() };
         }
         bitNodeN = resetInfo.currentNode;
-        dictSourceFiles = await getActiveSourceFiles_Custom(ns, getNsDataThroughFile);
+        dictSourceFiles = await getActiveSourceFiles(ns);
 
         // Initialize player info
         await getPlayerInfo(ns);
