@@ -1,4 +1,4 @@
-import { getNsDataThroughFile, log, formatMoney, getCachedCorpData, handleCorpError, safeCorpOperation, getTobaccoDivision, isDivisionValid } from './helpers.js'
+import { getNsDataThroughFile, log, formatMoney, getCachedCorpData, handleCorpError, safeCorpOperation, getTobaccoDivision, isDivisionValid, asleep } from './helpers.js'
 
 // Fix #6: Global Constant Definitions
 const CORP_CONFIG = {
@@ -68,7 +68,7 @@ export async function main(ns) {
             handleCorpError(ns, ns.getScriptName(), e, 'main loop');
         }
         
-        await ns.sleep(20000); // HR cycle every 20s
+        await asleep(ns, 20000); // HR cycle every 20s
     }
 }
 
@@ -146,7 +146,7 @@ async function manageHiring(ns, corp) {
                     for (let i = 0; i < toHire; i++) {
                         try {
                             await cc(ns, 'ns.corporation.hireEmployee(ns.args[0], ns.args[1])', [div.name, city]);
-                            await ns.sleep(200); // Small pause to prevent lag
+                            await asleep(ns, 200); // Small pause to prevent lag
                         } catch (e) {
                             // Fix Priority 1: Error logging instead of silent catch
                             log(ns, `ERROR in ${ns.getScriptName()} hiring employee for ${div.name}/${city}: ${e.message || e}`, false, 'error');

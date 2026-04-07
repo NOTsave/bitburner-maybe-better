@@ -1,4 +1,4 @@
-import { getNsDataThroughFile, log, formatMoney, getCachedCorpData } from './helpers.js'
+import { getNsDataThroughFile, log, formatMoney, getCachedCorpData, asleep } from './helpers.js'
 
 // Priority research for maximum efficiency
 const RESEARCH_PRIORITY = [
@@ -67,7 +67,7 @@ export async function main(ns) {
             log(ns, `🔬 Research error: ${e}`, false, 'error');
         }
         
-        await ns.sleep(5000); // Research check every 5s
+        await asleep(ns, 5000); // Research check every 5s
     }
 }
 
@@ -170,7 +170,7 @@ async function manageResearch(ns, corp) {
                 log(ns, `🔬 ${div.name}: ${targetResearch.name} (${formatMoney(targetResearch.cost)})`, false, 'success');
                 
                 // Small pause for processing
-                await ns.sleep(1000);
+                await asleep(ns, 1000);
             }
             
         } catch (e) {

@@ -1,4 +1,4 @@
-import { getNsDataThroughFile, log, formatMoney, getCachedCorpData } from './helpers.js'
+import { getNsDataThroughFile, log, formatMoney, getCachedCorpData, asleep } from './helpers.js'
 
 // Product Module Configuration
 const PRODUCT_CONFIG = {
@@ -37,7 +37,7 @@ export async function main(ns) {
             log(ns, `📦 Product error: ${e}`, false, 'error');
         }
         
-        await ns.sleep(10000); // Products check every 10s
+        await asleep(ns, 10000); // Products check every 10s
     }
 }
 
@@ -120,7 +120,7 @@ async function createNewProduct(ns, corp, divName, homeCity, products) {
     // If we have max products, remove worst one
     if (products.length >= PRODUCT_CONFIG.maxProducts) {
         await removeWorstProduct(ns, divName, homeCity, products);
-        await ns.sleep(2000); // Allow time for processing
+        await asleep(ns, 2000); // Allow time for processing
     }
     
     // Calculate investment
@@ -193,7 +193,7 @@ async function waitForDevelopment(ns, divName, homeCity, productName) {
                 log(ns, `SUCCESS: ${productName} complete (${product.developmentProgress.toFixed(1)}%)`, false, 'success');
                 
                 // Delay before setting up sales
-                await ns.sleep(PRODUCT_CONFIG.sellDelay);
+                await asleep(ns, PRODUCT_CONFIG.sellDelay);
                 
                 // Set up sales in all cities
                 await setupProductSales(ns, divName, productName);
@@ -210,7 +210,7 @@ async function waitForDevelopment(ns, divName, homeCity, productName) {
             log(ns, `ERROR in ${ns.getScriptName()} tracking development for ${productName}: ${e.message || e}`, false, 'error');
         }
         
-        await ns.sleep(PRODUCT_CONFIG.developmentCheckInterval);
+        await asleep(ns, PRODUCT_CONFIG.developmentCheckInterval);
     }
 }
 

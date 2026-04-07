@@ -1,4 +1,4 @@
-import { getNsDataThroughFile, log, safelyWriteData, DEFAULT_CORP_DATA_PATH } from './helpers.js';
+import { getNsDataThroughFile, log, safelyWriteData, DEFAULT_CORP_DATA_PATH, asleep } from './helpers.js';
 
 /** @param {NS} ns **/
 export async function main(ns) {
@@ -65,6 +65,6 @@ export async function main(ns) {
             // Single top-level catch handles all errors (fetch, division processing, write)
             log(ns, `ERROR: Corp-fetcher failed: ${e.message || e}`, false, 'error');
         }
-        await ns.sleep(2000);
+        await asleep(ns, 2000);
     }
 }

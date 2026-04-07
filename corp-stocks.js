@@ -1,5 +1,5 @@
 import { getNsDataThroughFile, log, formatMoney, formatNumber, formatRam, getFilePath, 
-    getFnRunViaNsExec, getFnIsAliveViaNsIsRunning, runCommand, getNsDataThroughFile_Custom, getCachedCorpData } from './helpers.js'
+    getFnRunViaNsExec, getFnIsAliveViaNsIsRunning, runCommand, getNsDataThroughFile_Custom, getCachedCorpData, asleep } from './helpers.js'
 import { setOperatingDividends } from './corp-dividend-manager.js'
 
 // Stock module configuration
@@ -52,7 +52,7 @@ export async function main(ns) {
             log(ns, `📈 Stock error: ${e}`, false, 'error');
         }
         
-        await ns.sleep(STOCK_CONFIG.checkInterval);
+        await asleep(ns, STOCK_CONFIG.checkInterval);
     }
 }
 
@@ -96,9 +96,9 @@ async function evaluateStockCondition(ns, corp, condition) {
                 };
                 
             case 'profit_margin':
-                // Simplified profit margin calculation
+                // Simplified profit margin calculation with zero protection
                 const profitPerShare = corp.sharePrice - (corp.issuedShares > 0 ? corp.shareSalePrice : 0);
-                const margin = profitPerShare / corp.sharePrice;
+                const margin = corp.sharePrice > 0 ? profitPerShare / corp.sharePrice : 0;
                 
                 return {
                     shouldTerminate: margin >= condition.value,

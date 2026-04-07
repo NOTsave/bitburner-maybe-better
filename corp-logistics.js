@@ -1,4 +1,4 @@
-import { getNsDataThroughFile, log, formatMoney, getCachedCorpData } from './helpers.js'
+import { getNsDataThroughFile, log, formatMoney, getCachedCorpData, asleep } from './helpers.js'
 
 // Fix #6: Global Constant Definitions
 const CORP_CONFIG = {
@@ -44,7 +44,7 @@ export async function main(ns) {
             log(ns, `🚚 Logistics error: ${e}`, false, 'error');
         }
         
-        await ns.sleep(LOGISTICS_CONFIG.checkInterval);
+        await asleep(ns, LOGISTICS_CONFIG.checkInterval);
     }
 }
 
@@ -71,7 +71,7 @@ async function manageUpgrades(ns, corp) {
                 if (corp.funds > cost * 3) {
                     await cc(ns, 'ns.corporation.purchaseUnlock(ns.args[0])', [unlock.name]);
                     log(ns, `SUCCESS: Purchased ${unlock.name} (${formatMoney(cost)})`, false, 'success');
-                    await ns.sleep(2000);
+                    await asleep(ns, 2000);
                     break; // Only one unlock per cycle
                 }
             }

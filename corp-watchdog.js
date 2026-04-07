@@ -1,5 +1,5 @@
 import {
-    log, getNsDataThroughFile, getErrorInfo, getFilePath
+    log, getNsDataThroughFile, getErrorInfo, getFilePath, asleep
 } from './helpers.js'
 
 // RAM-dodging wrapper functions
@@ -94,7 +94,7 @@ export async function main(ns) {
 
         } catch (err) {
             log(ns, `ERROR: Watchdog error: ${getErrorInfo(err)}`, false, 'error');
-            await ns.sleep(30000); // Wait longer on error
+            await asleep(ns, 30000); // Wait longer on error
         }
     }
 }

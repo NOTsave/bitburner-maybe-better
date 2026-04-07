@@ -1200,3 +1200,37 @@ export function getDivisionByType(corp, type) {
     }
     return div;
 }
+
+/**
+ * Validates if a division object has the required structure
+ * @param {Division} div - Division object to validate
+ * @returns {boolean} True if valid, false otherwise
+ */
+export function isDivisionValid(div) {
+    return div && typeof div === 'object' && typeof div.name === 'string';
+}
+
+/**
+ * Gets the Tobacco division from corporation data (uses 'Tobacco' type)
+ * @param {Corporation} corp - Corporation data object
+ * @returns {Division|null} Tobacco division or null if not found
+ */
+export function getTobaccoDivision(corp) {
+    if (!corp || !corp.divisions || !Array.isArray(corp.divisions)) {
+        return null;
+    }
+    return corp.divisions.find(d => d.type === 'Tobacco') || null;
+}
+
+/**
+ * Cross-platform sleep helper - uses ns.asleep() for Web (background tab friendly),
+ * falls back to ns.sleep() for compatibility
+ * @param {NS} ns - Netscript instance
+ * @param {number} ms - Milliseconds to sleep
+ */
+export async function asleep(ns, ms) {
+    if (ns.asleep) {
+        return await ns.asleep(ms);
+    }
+    return await ns.sleep(ms);
+}

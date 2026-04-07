@@ -1,4 +1,4 @@
-import { log, disableLogs, getNsDataThroughFile, formatMoney, getCachedCorpData, calculateRamUsage, getRunningModules, getTobaccoDivision, isDivisionValid, DEFAULT_CORP_DATA_PATH } from './helpers.js'
+import { log, disableLogs, getNsDataThroughFile, formatMoney, getCachedCorpData, calculateRamUsage, getRunningModules, getTobaccoDivision, isDivisionValid, DEFAULT_CORP_DATA_PATH, asleep } from './helpers.js'
 
 const STATE_FILE = '/Temp/corp-state.txt';
 const PROTECT_FILE = '/Temp/corp-protection.txt';
@@ -229,7 +229,7 @@ export async function main(ns) {
             log(ns, `ERROR: Critical error in manager: ${e.message || e}`, true, 'error');
         }
         
-        await ns.sleep(5000); // Manager runs every 5s
+        await asleep(ns, 5000); // Manager runs every 5s
     }
 }
 
@@ -387,7 +387,7 @@ async function terminateModule(ns, filename, moduleName) {
     try {
         const scripts = ns.ps('home').filter(s => s.filename === filename);
         for (const script of scripts) {
-            ns.kill(script.pid);
+            await ns.kill(script.pid);
             log(ns, `INFO: Terminating ${moduleName} (PID: ${script.pid})`, false, 'info');
         }
         await ns.sleep(2000); // Allow time for clean termination
@@ -427,7 +427,7 @@ async function optimizeRAMUsage(ns) {
         const moduleEntry = Object.values(MODULES).find(m => m.file === proc.filename);
         if (moduleEntry && moduleEntry.priority === 'low') {
             ns.print(`Terminating low-priority module: ${proc.filename}`);
-            ns.kill(proc.pid);
+            await ns.kill(proc.pid);
         }
     }
 }
