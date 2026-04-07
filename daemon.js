@@ -170,7 +170,7 @@ export async function main(ns) {
     let highUtilizationIterations = 0;
     let lastShareTime = 0; // Tracks when share was last invoked so we can respect the configured share-cooldown
     let allTargetsPrepped = false;
-
+}
     /** Ram-dodge getting updated player info with caching.
      * @param {NS} ns
      * @returns {Promise<Player>} */
@@ -267,7 +267,7 @@ export async function main(ns) {
         daemonHost = "home"; // ns.getHostname(); // get the name of this node (realistically, will always be home)
         const runOptions = getConfiguration(ns, argsSchema);
         if (!runOptions) return;
-
+}
         // Ensure no other copies of this script are running (they share memory)
         const scriptName = ns.getScriptName();
         const competingDaemons = processList(ns, daemonHost, false /* Important! Don't use the (global shared) cache. */)
@@ -987,11 +987,8 @@ export async function main(ns) {
             }
             await ns.sleep(loopInterval); // Prevent infinite loop without delay
         } while (!runOnce);
-    }
-    } catch (err) {
-        // Sometimes a script is shut down by throwing an object containing internal game script info. Detect this and exit silently
-        if (err?.env?.stopFlag) return;
-        log(ns, `WARNING: daemon.js Caught an error in the targeting loop: ${getErrorInfo(err)}`, true, 'warning');
+    } catch (err) { // The brace must be followed immediately by catch
+        log(ns, "ERROR: Dedicated targeting loop encountered an error: " + err, false, 'error');
     }
 
     // How much a weaken thread is expected to reduce security by
@@ -2362,4 +2359,5 @@ export async function main(ns) {
     } catch (err) {
         ns.tprint("Daemon encountered a critical error: " + err);
     }
+}
 }
