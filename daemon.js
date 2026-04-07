@@ -1,11 +1,9 @@
-
 import {
     formatMoney, formatRam, formatDuration, formatDateTime, formatNumber, formatNumberShort,
-    hashCode, disableLogs, log, getConfiguration, getValidCachedData, 
-    GENERIC_TEMP_PATH, DEFAULT_CORP_DATA_PATH, getJitteredSleep, getNsDataThroughFile,
-    waitForProcessToComplete_Custom, getActiveSourceFiles_Custom, getFilePath, exec,
-    getErrorInfo, instanceCount, tail, jsonReplacer, getActiveSourceFiles, runCommand_Custom,
-    getFnRunViaNsExec
+    hashCode, disableLogs, log, getFilePath, getConfiguration,
+    getNsDataThroughFile_Custom, runCommand_Custom, waitForProcessToComplete_Custom,
+    tryGetBitNodeMultipliers_Custom, getActiveSourceFiles_Custom,
+    getFnRunViaNsExec, tail, autoRetry, getErrorInfo
 } from './helpers.js'
 
 // Cache frequently used functions to reduce property access
@@ -170,7 +168,7 @@ export async function main(ns) {
     let highUtilizationIterations = 0;
     let lastShareTime = 0; // Tracks when share was last invoked so we can respect the configured share-cooldown
     let allTargetsPrepped = false;
-}
+
     /** Ram-dodge getting updated player info with caching.
      * @param {NS} ns
      * @returns {Promise<Player>} */
@@ -231,7 +229,7 @@ export async function main(ns) {
         if (canUseCache)
             psResult = psCache[serverName];
         // Note: We experimented with ram-dodging `ps`, but there's so much data involed that serializing/deserializing generates a lot of latency
-        //psResult ??= await getNsDataThroughFile(ns, 'ns.ps(ns.args[0])', null, [serverName]);
+        //psResult ??= await getNsDataThroughFile(ns, 'ns.ps(ns.args[0])', null, [serverName]));
         psResult ??= psCache[serverName] = ns.ps(serverName);
         return psResult;
     }
@@ -267,6 +265,7 @@ export async function main(ns) {
         daemonHost = "home"; // ns.getHostname(); // get the name of this node (realistically, will always be home)
         const runOptions = getConfiguration(ns, argsSchema);
         if (!runOptions) return;
+
         // Ensure no other copies of this script are running (they share memory)
         const scriptName = ns.getScriptName();
         const competingDaemons = processList(ns, daemonHost, false /* Important! Don't use the (global shared) cache. */)
@@ -379,9 +378,9 @@ export async function main(ns) {
             { name: "spend-hacknet-hashes.js", shouldRun: () => reqRam(64) && 9 in dictSourceFiles, args: [], shouldTail: false }, // Always have this running to make sure hashes aren't wasted
             { name: "sleeve.js", shouldRun: () => reqRam(64) && 10 in dictSourceFiles }, // Script to create manage our sleeves for us
             { name: "gangs.js", shouldRun: () => reqRam(64) && 2 in dictSourceFiles }, // Script to create manage our gang for us
-            { name: "corp-fetcher.js", shouldRun: () => true, args: [], shouldTail: false }, // Always run corp data fetcher for enterprise system
-            // Removed corp-manager.js until it is created to fix Bug #5
-            { name: "work-for-factions.js", args: ['--fast-crimes-only', '--no-coding-contracts'],  // Singularity script to manage how we use our "focus" work.
+            { name: "corp.js", shouldRun: () => reqRam(32) && 3 in dictSourceFiles }, // Script to manage corporation for us (RAM-safe corp automation)
+            {
+                name: "work-for-factions.js", args: ['--fast-crimes-only', '--no-coding-contracts'],  // Singularity script to manage how we use our "focus" work.
                 shouldRun: () => 4 in dictSourceFiles && reqRam(256 / (2 ** dictSourceFiles[4]) && !studying) // Higher SF4 levels result in lower RAM requirements
             },
             {
@@ -419,8 +418,7 @@ export async function main(ns) {
             {   // Periodically check for new faction invites and join if deemed useful to be in that faction. Also determines how many augs we could afford if we installed right now
                 interval: 31000, name: "faction-manager.js", args: ['--verbose', 'false'],
                 // Don't start auto-joining factions until we're holding 1 billion (so coding contracts returning money is probably less critical) or we've joined one already
-                shouldRun: () => 4 in dictSourceFiles && (_cachedPlayerInfo.factions.length > 0 || getPlayerMoney(ns) > 1e9) &&
-                    reqRam(128 / (2 ** dictSourceFiles[4])) // Uses singularity functions, and higher SF4 levels result in lower RAM requirements
+                shouldRun: () => 4 in dictSourceFiles && (_cachedPlayerInfo.factions?.length > 0) && reqRam(128 / (2 ** dictSourceFiles[4])) // Uses singularity functions, and higher SF4 levels result in lower RAM requirements
             },
             {   // Periodically look to purchase new servers, but note that these are often not a great use of our money (hack income isn't everything) so we may hold-back.
                 interval: 32000, name: "host-manager.js", minRamReq: 6.55,
@@ -449,7 +447,6 @@ export async function main(ns) {
 
         await buildToolkit(ns, [...asynchronousHelpers, ...periodicScripts, ...hackTools]); // build toolkit
         await buildServerList(ns, false); // create the exhaustive server list
-        await getStaticServerData(ns); // gather static server data
 
         // If we ascended less than 10 minutes ago, start with some study and/or XP cycles to quickly restore hack XP
         const timeSinceLastAug = Date.now() - resetInfo.lastAugReset;
@@ -715,11 +712,10 @@ export async function main(ns) {
         log(ns, "doTargetingLoop");
         let loops = -1;
         //let isHelperListLaunched = false; // Uncomment this and related code to keep trying to start helpers
-        try {
-            do {
-                loops++;
-                if (loops > 0) await ns.sleep(loopInterval);
-                try {
+        do {
+            loops++;
+            if (loops > 0) await ns.sleep(loopInterval);
+            try {
                 let start = Date.now();
                 psCache = {}; // Clear the cache of the process list we update once per loop
                 await buildServerList(ns, true); // Check if any new servers have been purchased by the external host_manager process
@@ -875,15 +871,33 @@ export async function main(ns) {
                         return diff != 0.0 ? diff : b.getMoneyPerRamSecond() - a.getMoneyPerRamSecond(); // Break ties by sorting by max-money
                     });
                     // Try to prep them all unless one of our capping rules are hit
-
-            // check for servers that need to be rooted
-            // simultaneously compare our current target to potential targets
-            for (let i = 0; i < targetingOrder.length; i++) {
-                if ((Date.now() - start) >= maxLoopTime) { // To avoid lagging the game, completely break out of the loop if we start to run over
-                    skipped.push(...targetingOrder.slice(i));
-                    workCapped = true;
-                    break;
+                    // TODO: Something was not working right here (might be working now that prep code is fixed) so we can probably start prepping more than 1 server again.
+                    for (let j = 0; j < 1 /*cantHack.length*/; j++) {
+                        const server = cantHack[j];
+                        if (isWorkCapped()) break;
+                        if (cantHackButPrepped.includes(server) || cantHackButPrepping.includes(server))
+                            continue;
+                        const prepResult = await prepServer(ns, server);
+                        if (prepResult == true) {
+                            cantHackButPrepping.push(server);
+                        } else if (prepResult == null) {
+                            cantHackButPrepped.push(server);
+                        } else {
+                            log(ns, 'Pre-Prep failed for "' + server.name + '" with ' + server.requiredHackLevel +
+                                ' hack requirement (RAM Utilization: ' + (getTotalNetworkUtilization() * 100).toFixed(2) + '%)');
+                            failed.push(server);
+                            break;
+                        }
+                    }
                 }
+
+                let network = getNetworkStats();
+                let utilizationPercent = network.totalUsedRam / network.totalMaxRam;
+                highUtilizationIterations = utilizationPercent >= maxUtilization ? highUtilizationIterations + 1 : 0;
+                lowUtilizationIterations = utilizationPercent <= lowUtilizationThreshold ? lowUtilizationIterations + 1 : 0;
+
+                // If we've been at low utilization for longer than the max hack cycle out of all our targets, we can add a target.
+                // 
                 // TODO: Make better use of RAM by prepping more targets. Try not scheduling batches way in advance with a sleep, but instead
                 //       witholding batches until they're closer to when they need to be kicked off.
                 //       We can add logic to kill lower priority tasks using RAM (such as share, and scripts targetting low priority targets)
@@ -937,7 +951,6 @@ export async function main(ns) {
                     await farmHackXp(ns, freeRamToUse, verbose && (expectedRunTime > 10000 || lowUtilizationIterations % 10 == 0), 1);
                 }
 
-                try {
                 // Use any unspent RAM on share if we are currently working for a faction
                 const maxShareUtilization = options['share-max-utilization']
                 if (failed.length <= 0 && utilizationPercent < maxShareUtilization && // Only share RAM if we have succeeded in all hack cycle scheduling and have RAM to space
@@ -986,21 +999,19 @@ export async function main(ns) {
                 }
                 //log(ns, 'Prepping: ' + prepping.map(s => s.name).join(', '))
                 //log(ns, 'targeting: ' + targeting.map(s => s.name).join(', '))
-                } catch (err) {
-                    // Sometimes a script is shut down by throwing an object containing internal game script info. Detect this and exit silently
-                    if (err?.env?.stopFlag) return;
-                    log(ns, `WARNING: daemon.js Caught an error in the targeting loop: ${getErrorInfo(err)}`, true, 'warning');
-                }
-                await ns.sleep(loopInterval); // Prevent infinite loop without delay
-            } while (!runOnce);
-        } catch (err) { // The brace must be followed immediately by catch
-            log(ns, "ERROR: Dedicated targeting loop encountered an error: " + err, false, 'error');
-        }
+            } catch (err) {
+                // Sometimes a script is shut down by throwing an object containing internal game script info. Detect this and exit silently
+                if (err?.env?.stopFlag) return;
+                log(ns, `WARNING: daemon.js Caught an error in the targeting loop: ${getErrorInfo(err)}`, true, 'warning');
+                continue;
+            }
+        } while (!runOnce);
+    }
 
     // How much a weaken thread is expected to reduce security by
     let actualWeakenPotency = () => bitNodeMults.ServerWeakenRate * weakenThreadPotency;
 
-    // Get a dictionary from retrieving the same information for every server name
+    // Get a dictionary from retrieving the same infromation for every server name
     async function getServersDict(ns, command) {
         return await getNsDataThroughFile(ns, `Object.fromEntries(ns.args.map(server => [server, ns.${command}(server)]))`,
             `/Temp/${command}-all.txt`, allHostNames);
@@ -1020,19 +1031,21 @@ export async function main(ns) {
      * @param {NS} ns */
     async function getStaticServerData(ns) {
         if (verbose) log(ns, `getStaticServerData: ${allHostNames}`);
-        dictServerRequiredHackingLevels = await getServersDict(ns, 'getServerRequiredHackingLevel');
+        dictServerRequiredHackinglevels = await getServersDict(ns, 'getServerRequiredHackingLevel');
         dictServerNumPortsRequired = await getServersDict(ns, 'getServerNumPortsRequired');
         dictServerGrowths = await getServersDict(ns, 'getServerGrowth');
-        // The "GetServer" object result is used with formulas API (due to type checking that the parameter is a valid "server" instance)
+        // The "GetServer" object result is used with the formulas API (due to type checking that the parameter is a valid "server" instance)
         // TODO: There is now a "ns.formulas.mockServer()" function that we can switch to
         dictInitialServerInfos = await getServersDict(ns, 'getServer');
-        // Also immediately retrieve data which is occasionally updated
+        // Also immediately retrieve the data which is occasionally updated
         await updateCachedServerData(ns);
         await refreshDynamicServerData(ns);
     }
+
     /** Refresh information about servers that should be updated once per loop, but doesn't need to be up-to-the-second.
      * @param {NS} ns */
     async function updateCachedServerData(ns) {
+        //if (verbose) log(ns, `updateCachedServerData`);
         dictServerMaxRam = await getServersDict(ns, 'getServerMaxRam');
     }
 
@@ -1052,9 +1065,9 @@ export async function main(ns) {
         else
             dictServerProfitInfo = Object.fromEntries(JSON.parse(analyzeHackResult).map(s => [s.hostname, s]));
         // Double home reserved ram once we reach the configured threshold
-        if (homeServer && homeServer.totalRam(true) >= options['double-reserve-threshold']) {
+        if (homeServer && homeServer.totalRam(true) >= options['double-reserve-threshold'])
             homeReservedRam = 2 * options['reserved-ram'];
-        }
+
         // Hack: Below concerns aren't related to "server data", but are things we also wish to refresh just once in a while
         // Determine whether we have purchased stock API accesses yet (affects reserving and attempts to manipulate stock markets)
         haveTixApi = haveTixApi || await getNsDataThroughFile(ns, `ns.stock.hasTixApiAccess()`);
@@ -1072,7 +1085,6 @@ export async function main(ns) {
         /** @param {NS} ns
          * @param {string} node - a.k.a host / server **/
         constructor(ns, node) {
-            this.ns = ns; // TODO: This might get us in trouble
             this.name = node;
             this.server = dictInitialServerInfos[node];
             this.requiredHackLevel = dictServerRequiredHackinglevels[node];
@@ -2346,7 +2358,7 @@ export async function main(ns) {
         let startupAttempts = 0;
         while (startupAttempts++ <= 5) {
             try {
-                await runStartupScripts(ns);
+                await startup(ns);
             } catch (err) {
                 if (startupAttempts == 5)
                     log(ns, `ERROR: daemon.js Keeps catching a fatal error during startup: ${getErrorInfo(err)}`, true, 'error');
@@ -2360,9 +2372,5 @@ export async function main(ns) {
     }
 
     // Start daemon.js
-    try {
-        await startup_withRetries(ns);
-    } catch (err) {
-        ns.tprint("Daemon encountered a critical error: " + err);
-    }
+    await startup_withRetries(ns);
 }
