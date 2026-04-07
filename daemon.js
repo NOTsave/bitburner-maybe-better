@@ -229,7 +229,7 @@ export async function main(ns) {
         if (canUseCache)
             psResult = psCache[serverName];
         // Note: We experimented with ram-dodging `ps`, but there's so much data involed that serializing/deserializing generates a lot of latency
-        //psResult ??= await getNsDataThroughFile(ns, 'ns.ps(ns.args[0])', null, [serverName]));
+        //psResult ??= await getNsDataThroughFile(ns, 'ns.ps(ns.args[0])', null, [serverName]);
         psResult ??= psCache[serverName] = ns.ps(serverName);
         return psResult;
     }
@@ -378,7 +378,7 @@ export async function main(ns) {
             { name: "spend-hacknet-hashes.js", shouldRun: () => reqRam(64) && 9 in dictSourceFiles, args: [], shouldTail: false }, // Always have this running to make sure hashes aren't wasted
             { name: "sleeve.js", shouldRun: () => reqRam(64) && 10 in dictSourceFiles }, // Script to create manage our sleeves for us
             { name: "gangs.js", shouldRun: () => reqRam(64) && 2 in dictSourceFiles }, // Script to create manage our gang for us
-            { name: "corp.js", shouldRun: () => reqRam(32) && 3 in dictSourceFiles }, // Script to manage corporation for us (RAM-safe corp automation)
+            { name: "corp-fetcher.js", shouldRun: () => true, args: [], shouldTail: false }, // Always run corp data fetcher for enterprise system
             {
                 name: "work-for-factions.js", args: ['--fast-crimes-only', '--no-coding-contracts'],  // Singularity script to manage how we use our "focus" work.
                 shouldRun: () => 4 in dictSourceFiles && reqRam(256 / (2 ** dictSourceFiles[4]) && !studying) // Higher SF4 levels result in lower RAM requirements
@@ -473,7 +473,9 @@ export async function main(ns) {
         }
 
         // Start the main targetting loop
+        log(ns, `INFO: startup() about to call doTargetingLoop() - runOnce=${runOnce}, will ${runOnce ? 'return after one loop' : 'NEVER RETURN (infinite loop)'}`, false, 'info');
         await doTargetingLoop(ns);
+        log(ns, `INFO: startup() returned from doTargetingLoop() - this should only happen with --run-once flag`, false, 'info');
     }
 
     /** Periodic scripts helper function: In bitnodes with hack income disabled, don't waste money on improving hacking infrastructure */
@@ -759,7 +761,7 @@ export async function main(ns) {
                                 `Manip: ${shouldManipulateGrow[s.name] ? "grow" : shouldManipulateHack[s.name] ? "hack" : '(disabled)'}`))
                             .join('\n  ');
                         log(ns, targetsLog);
-                        ns.write("/Temp/targets.txt", targetsLog, "w");
+                        await ns.write("/Temp/targets.txt", targetsLog, "w");
                     }
                 }
                 // Processed servers will be split into various lists for generating a summary at the end
@@ -2356,9 +2358,14 @@ export async function main(ns) {
     /** @param {NS} ns **/
     async function startup_withRetries(ns) {
         let startupAttempts = 0;
+        log(ns, `INFO: startup_withRetries beginning - will attempt startup up to 5 times`, false, 'info');
         while (startupAttempts++ <= 5) {
             try {
+                log(ns, `INFO: startup_withRetries calling startup() - attempt ${startupAttempts}/5`, false, 'info');
                 await startup(ns);
+                // WARNING: If startup() succeeds and enters doTargetingLoop(), this line is NEVER REACHED
+                // because doTargetingLoop() is an infinite loop (unless runOnce is true)
+                log(ns, `INFO: startup() returned successfully - this should only happen with --run-once flag`, false, 'info');
             } catch (err) {
                 if (startupAttempts == 5)
                     log(ns, `ERROR: daemon.js Keeps catching a fatal error during startup: ${getErrorInfo(err)}`, true, 'error');
@@ -2369,6 +2376,7 @@ export async function main(ns) {
                 }
             }
         }
+        log(ns, `ERROR: Exited startup retry loop after ${startupAttempts} attempts - this should never happen`, true, 'error');
     }
 
     // Start daemon.js

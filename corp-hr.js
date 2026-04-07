@@ -53,7 +53,9 @@ export async function main(ns) {
             const now = Date.now();
             
             // --- MORALE AND ENERGY MANAGEMENT ---
-            await manageMorale(ns, corp, now, lastTeaTime, lastPartyTime);
+            const result = await manageMorale(ns, corp, now, lastTeaTime, lastPartyTime);
+            lastTeaTime = result.lastTeaTime;
+            lastPartyTime = result.lastPartyTime;
             
             // --- DYNAMIC HIRING ---
             await manageHiring(ns, corp);
@@ -73,8 +75,11 @@ export async function main(ns) {
 async function manageMorale(ns, corp, now, lastTeaTime, lastPartyTime) {
     if (!corp.divisions || !Array.isArray(corp.divisions)) {
         log(ns, "WARN: No divisions found in corporation data", false, 'warning');
-        return;
+        return { lastTeaTime, lastPartyTime };
     }
+    
+    let teaPerformed = false;
+    let partyPerformed = false;
     
     for (const div of corp.divisions) {
         // Fix #5: Defensive iteration with null checks
@@ -91,6 +96,7 @@ async function manageMorale(ns, corp, now, lastTeaTime, lastPartyTime) {
                 // Fix #2: Tea for morale (every 30s)
                 if (now - lastTeaTime > HR_CONFIG.teaInterval) {
                     await cc(ns, 'ns.corporation.buyTea(ns.args[0], ns.args[1])', [div.name, city]);
+                    teaPerformed = true;
                 }
                 
                 // Fix #2: Party for big boost (every 60s)
@@ -98,6 +104,7 @@ async function manageMorale(ns, corp, now, lastTeaTime, lastPartyTime) {
                     // Fix #6: Use constant instead of magic number
                     await cc(ns, 'ns.corporation.throwParty(ns.args[0], ns.args[1], ns.args[2])', 
                         [div.name, city, CORP_CONFIG.PARTY_COST]);
+                    partyPerformed = true;
                 }
                 
             } catch (e) {
@@ -107,8 +114,10 @@ async function manageMorale(ns, corp, now, lastTeaTime, lastPartyTime) {
         }
     }
     
-    if (now - lastTeaTime > HR_CONFIG.teaInterval) lastTeaTime = now;
-    if (now - lastPartyTime > HR_CONFIG.partyInterval) lastPartyTime = now;
+    return {
+        lastTeaTime: teaPerformed ? now : lastTeaTime,
+        lastPartyTime: partyPerformed ? now : lastPartyTime
+    };
 }
 
 async function manageHiring(ns, corp) {
@@ -203,7 +212,7 @@ async function calculateCurrentStaff(ns, division) {
                 total += office.numEmployees ?? office.employees ?? 0;
             }
         } catch (e) {
-            // Skip cities that fail
+            log(ns, `WARN: Failed to get office data for ${division.name}/${city}: ${e.message || e}`, false, 'warning');
         }
     }
     return total;

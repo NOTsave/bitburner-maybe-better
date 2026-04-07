@@ -69,7 +69,7 @@ const MAX_RAM = 15;
 const RESERVED_RAM = 2; // Reserve for system and manager
 
 // Dynamic RAM calculation with race condition protection
-function getAvailableRam(ns) {
+async function getAvailableRam(ns) {
     const host = "home";
     let attempts = 0;
     const maxAttempts = 3;
@@ -90,7 +90,7 @@ function getAvailableRam(ns) {
         
         attempts++;
         if (attempts < maxAttempts) {
-            ns.sleep(100); // Brief pause between attempts
+            await ns.sleep(100); // Brief pause between attempts
         }
     }
     
@@ -123,7 +123,7 @@ export async function main(ns) {
     // --- AUTOSTART WATCHDOG ---
     if (!ns.isRunning('corp-watchdog.js', 'home')) {
         log(ns, "INFO: Starting Watchdog (protection)...", true, 'success');
-        const watchdogPid = ns.run('corp-watchdog.js', 1);
+        const watchdogPid = await ns.run('corp-watchdog.js', 1);
         if (watchdogPid === 0) {
             log(ns, "⚠️ ERROR: Failed to start corp-watchdog.js! Check RAM.", true, 'error');
         } else {
@@ -134,7 +134,7 @@ export async function main(ns) {
     // --- AUTOSTART DATA FETCHER ---
     if (!ns.isRunning('corp-fetcher.js', 'home')) {
         log(ns, "INFO: Starting Data Fetcher...", true, 'success');
-        const fetcherPid = ns.run('corp-fetcher.js', 1);
+        const fetcherPid = await ns.run('corp-fetcher.js', 1);
         if (fetcherPid === 0) {
             log(ns, "⚠️ ERROR: Failed to start corp-fetcher.js!", true, 'error');
         } else {
@@ -169,16 +169,27 @@ export async function main(ns) {
     if (!dataAvailable) {
         log(ns, "ERROR: Data not available even after 5 minutes! Starting in emergency mode...", true, 'error');
         await ns.sleep(5000);
+        try {
             // Emergency mode - start only basic modules with dynamic RAM calculation
-            const currentAvailableRAM = getAvailableRam(ns);
-        const emergencyModules = ['corp-products.js', 'corp-research.js'];
-        for (const modName of emergencyModules) {
-            if (ns.isRunning(modName, 'home')) continue;
-            const config = Object.values(MODULES).find(m => m.file === modName);
-            if (config && currentAvailableRAM >= config.ram) {
-                ns.run(modName, 1);
-                log(ns, `WARNING: Emergency start: ${modName}`, true, 'warning');
+            const currentAvailableRAM = await getAvailableRam(ns);
+            log(ns, `INFO: Emergency mode - Available RAM: ${currentAvailableRAM.toFixed(1)}GB`, false, 'info');
+            const emergencyModules = ['corp-products.js', 'corp-research.js'];
+            for (const modName of emergencyModules) {
+                if (ns.isRunning(modName, 'home')) continue;
+                const config = Object.values(MODULES).find(m => m.file === modName);
+                if (config && currentAvailableRAM >= config.ram) {
+                    const pid = await ns.run(modName, 1);
+                    if (pid === 0) {
+                        log(ns, `ERROR: Emergency start failed for ${modName} - insufficient RAM or script not found`, false, 'error');
+                    } else {
+                        log(ns, `WARNING: Emergency start: ${modName} (PID: ${pid})`, true, 'warning');
+                    }
+                } else {
+                    log(ns, `INFO: Skipping ${modName} - insufficient RAM (${config?.ram || '?'}GB needed, ${currentAvailableRAM.toFixed(1)}GB available)`, false, 'info');
+                }
             }
+        } catch (e) {
+            log(ns, `ERROR: Emergency mode failed: ${e.message || e}`, true, 'error');
         }
     }
 
@@ -202,7 +213,7 @@ export async function main(ns) {
                 watchdogRunning: ns.isRunning('corp-watchdog.js', 'home'),
                 fetcherRunning: ns.isRunning('corp-fetcher.js', 'home')
             };
-            ns.write(PROTECT_FILE, JSON.stringify(heartbeat), 'w');
+            await ns.write(PROTECT_FILE, JSON.stringify(heartbeat), 'w');
 
             // --- INTELLIGENT MODULE MANAGEMENT WITH SELF-TERMINATION ---
             await manageModulesWithSelfTermination(ns, state);
@@ -223,7 +234,7 @@ export async function main(ns) {
 }
 
 async function manageModulesWithSelfTermination(ns, state) {
-    const availableRAM = getAvailableRam(ns);
+    const availableRAM = await getAvailableRam(ns);
     
     for (const [name, config] of Object.entries(MODULES)) {
         const shouldRun = shouldModuleRun(ns, name, config, state, availableRAM);
@@ -232,7 +243,7 @@ async function manageModulesWithSelfTermination(ns, state) {
         if (shouldRun && !isRunning) {
             if (availableRAM >= config.ram) {
                 log(ns, `INFO: Starting module: ${name} (${config.ram}GB RAM)`, false, 'info');
-                ns.run(config.file, 1);
+                await ns.run(config.file, 1);
                 await ns.sleep(1000); // Allow time to start
             } else {
                 log(ns, `WARNING: Insufficient RAM for ${name} (${config.ram}GB needed, ${availableRAM.toFixed(1)}GB available)`, false, 'warning');

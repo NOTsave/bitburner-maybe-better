@@ -1,5 +1,5 @@
 import { getNsDataThroughFile, log, formatMoney, formatNumber, formatRam, getFilePath, 
-    getFnRunViaNsExec, getFnIsAliveViaNsIsRunning, runCommand, getNsDataThroughFile_Custom } from './helpers.js'
+    getFnRunViaNsExec, getFnIsAliveViaNsIsRunning, runCommand, getNsDataThroughFile_Custom, getCachedCorpData } from './helpers.js'
 import { setOperatingDividends } from './corp-dividend-manager.js'
 
 // Stock module configuration
@@ -162,8 +162,11 @@ async function manageDividends(ns, corp) {
         const targetDividendPercent = STOCK_CONFIG.dividendTarget * 100; // Convert 0.3 → 30
         const currentDividendPercent = (corp.dividendRate || 0) * 100;
         
+        log(ns, `DEBUG: Dividend check - target=${targetDividendPercent.toFixed(1)}%, current=${currentDividendPercent.toFixed(1)}%, diff=${Math.abs(currentDividendPercent - targetDividendPercent).toFixed(1)}%`, false, 'info');
+        
         if (Math.abs(currentDividendPercent - targetDividendPercent) > 5) { // Difference > 5%
-            await setOperatingDividends(ns, targetDividendPercent / 100, 'Adjusting dividend rate for stock market stability');
+            log(ns, `INFO: Calling setOperatingDividends with ${targetDividendPercent.toFixed(0)} (0-100 range expected)`, false, 'info');
+            await setOperatingDividends(ns, targetDividendPercent, 'Adjusting dividend rate for stock market stability');
             log(ns, `INFO: Setting dividend rate to ${targetDividendPercent.toFixed(0)}% (from ${currentDividendPercent.toFixed(0)}%)`, false, 'info');
         }
         

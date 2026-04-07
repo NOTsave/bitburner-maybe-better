@@ -59,14 +59,11 @@ export async function main(ns) {
             };
 
             // Atomic write: use improved safelyWriteData with checksum/timestamp
-            try {
-                await safelyWriteData(ns, DATA_PATH, corpSummary);
-            } catch (writeError) {
-                log(ns, `ERROR: Failed to write corp data: ${writeError.message || writeError}`, false, 'error');
-                // Continue running, don't let write failures crash the fetcher
-            }
+            await safelyWriteData(ns, DATA_PATH, corpSummary);
+            
         } catch (e) {
-            log(ns, `CRITICAL: Corp-fetcher failed: ${e}`, false, 'error');
+            // Single top-level catch handles all errors (fetch, division processing, write)
+            log(ns, `ERROR: Corp-fetcher failed: ${e.message || e}`, false, 'error');
         }
         await ns.sleep(2000);
     }
