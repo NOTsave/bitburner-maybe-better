@@ -267,7 +267,6 @@ export async function main(ns) {
         daemonHost = "home"; // ns.getHostname(); // get the name of this node (realistically, will always be home)
         const runOptions = getConfiguration(ns, argsSchema);
         if (!runOptions) return;
-}
         // Ensure no other copies of this script are running (they share memory)
         const scriptName = ns.getScriptName();
         const competingDaemons = processList(ns, daemonHost, false /* Important! Don't use the (global shared) cache. */)
@@ -478,6 +477,7 @@ export async function main(ns) {
 
         // Start the main targetting loop
         await doTargetingLoop(ns);
+    }
 
     /** Periodic scripts helper function: In bitnodes with hack income disabled, don't waste money on improving hacking infrastructure */
     function shouldImproveHacking() {
@@ -715,10 +715,11 @@ export async function main(ns) {
         log(ns, "doTargetingLoop");
         let loops = -1;
         //let isHelperListLaunched = false; // Uncomment this and related code to keep trying to start helpers
-        do {
-            loops++;
-            if (loops > 0) await ns.sleep(loopInterval);
-            try {
+        try {
+            do {
+                loops++;
+                if (loops > 0) await ns.sleep(loopInterval);
+                try {
                 let start = Date.now();
                 psCache = {}; // Clear the cache of the process list we update once per loop
                 await buildServerList(ns, true); // Check if any new servers have been purchased by the external host_manager process
@@ -936,6 +937,7 @@ export async function main(ns) {
                     await farmHackXp(ns, freeRamToUse, verbose && (expectedRunTime > 10000 || lowUtilizationIterations % 10 == 0), 1);
                 }
 
+                try {
                 // Use any unspent RAM on share if we are currently working for a faction
                 const maxShareUtilization = options['share-max-utilization']
                 if (failed.length <= 0 && utilizationPercent < maxShareUtilization && // Only share RAM if we have succeeded in all hack cycle scheduling and have RAM to space
@@ -984,12 +986,16 @@ export async function main(ns) {
                 }
                 //log(ns, 'Prepping: ' + prepping.map(s => s.name).join(', '))
                 //log(ns, 'targeting: ' + targeting.map(s => s.name).join(', '))
-            }
-            await ns.sleep(loopInterval); // Prevent infinite loop without delay
-        } while (!runOnce);
-    } catch (err) { // The brace must be followed immediately by catch
-        log(ns, "ERROR: Dedicated targeting loop encountered an error: " + err, false, 'error');
-    }
+                } catch (err) {
+                    // Sometimes a script is shut down by throwing an object containing internal game script info. Detect this and exit silently
+                    if (err?.env?.stopFlag) return;
+                    log(ns, `WARNING: daemon.js Caught an error in the targeting loop: ${getErrorInfo(err)}`, true, 'warning');
+                }
+                await ns.sleep(loopInterval); // Prevent infinite loop without delay
+            } while (!runOnce);
+        } catch (err) { // The brace must be followed immediately by catch
+            log(ns, "ERROR: Dedicated targeting loop encountered an error: " + err, false, 'error');
+        }
 
     // How much a weaken thread is expected to reduce security by
     let actualWeakenPotency = () => bitNodeMults.ServerWeakenRate * weakenThreadPotency;
@@ -2359,5 +2365,4 @@ export async function main(ns) {
     } catch (err) {
         ns.tprint("Daemon encountered a critical error: " + err);
     }
-}
 }
