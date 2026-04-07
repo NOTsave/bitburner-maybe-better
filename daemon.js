@@ -1,3 +1,4 @@
+
 import {
     formatMoney, formatRam, formatDuration, formatDateTime, formatNumber, formatNumberShort,
     hashCode, disableLogs, log, getConfiguration, getValidCachedData, 
@@ -2361,6 +2362,4 @@ export async function main(ns) {
     } catch (err) {
         ns.tprint("Daemon encountered a critical error: " + err);
     }
-}
-}
 }
