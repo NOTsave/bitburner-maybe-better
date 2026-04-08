@@ -5,7 +5,7 @@ const PRODUCT_CONFIG = {
     maxProducts: 3,              // Maximum 3 products
     minInvestment: 1e9,          // Minimum investment 1B
     maxInvestment: 2e12,          // Maximum investment 2T
-    investmentPercent: 0.02,        // 2% of funds for investment
+    investmentPercent: 0.01,        // 1% of funds for investment (guide: exponent is only 0.1)
     developmentCheckInterval: 3000,  // Check every 3s
     sellDelay: 5000,              // 5s delay after completion
     profitMargin: 0.7              // Minimum profit margin to continue
@@ -265,13 +265,15 @@ async function manageWarehouses(ns, divName, corp) {
 
 function calculateInvestment(availableFunds) {
     // Dynamic investment based on corporation size
+    // Per corp guide: DesignInvestment and AdvertisingInvestment have exponent 0.1
+    // So 1% of funds is sufficient - spending more has diminishing returns
     let investment;
     
-    if (availableFunds > 1e12) { // Late game: 2% max 2T
+    if (availableFunds > 1e12) { // Late game: 1% max 2T
         investment = Math.min(availableFunds * PRODUCT_CONFIG.investmentPercent, PRODUCT_CONFIG.maxInvestment);
-    } else if (availableFunds > 500e9) { // Mid game: 2% max 500B
+    } else if (availableFunds > 500e9) { // Mid game: 1% max 500B
         investment = Math.min(availableFunds * PRODUCT_CONFIG.investmentPercent, 500e9);
-    } else { // Early game: 2% max 100B
+    } else { // Early game: 1% max 100B
         investment = Math.min(availableFunds * PRODUCT_CONFIG.investmentPercent, 100e9);
     }
     

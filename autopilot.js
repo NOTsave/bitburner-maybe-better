@@ -793,6 +793,13 @@ export async function main(ns) {
             return; // Exit early if we're monitoring an existing process
         }
 
+        // Pre-check: Ensure we have enough money for casino travel (200k minimum, 300k buffer to match sleeve reserve)
+        const CASINO_SEED_MONEY = 300000;
+        if (player.money < CASINO_SEED_MONEY) {
+            log(ns, `INFO: Need ${formatMoney(CASINO_SEED_MONEY)} to run casino, have ${formatMoney(player.money)}. Skipping for now...`, false, 'info');
+            return;
+        }
+
         // Launch new casino script if not running
         const casinoScript = getFilePath('casino.js');
         if (!ns.fileExists(casinoScript)) {
@@ -921,11 +928,14 @@ export async function main(ns) {
         if (await shouldDelayInstall(ns, player, facman)) // If we're currently in a state where we should not be resetting, skip reset logic
             return reservedPurchase = 0;
 
-        // Force dividend payout through standardized data retrieval system
-        const corpData = getCachedCorpData(ns);
-        if (corpData && corpData.divisions) {
-            // Set dividends to 100% right before reset to squeeze every dollar for final augs
-            await maximizeDividends(ns, 'Final augmentation push before reset');
+        // Force dividend payout through standardized data retrieval system (only if corp API is available)
+        const hasCorpApi = (resetInfo.currentNode === 3 || 3 in dictOwnedSourceFiles) && resetInfo.currentNode !== 8;
+        if (hasCorpApi) {
+            const corpData = getCachedCorpData(ns);
+            if (corpData && corpData.divisions) {
+                // Set dividends to 100% right before reset to squeeze every dollar for final augs
+                await maximizeDividends(ns, 'Final augmentation push before reset');
+            }
         }
 
         // Ensure the money needed for the above augs doesn't get ripped out from under us by reserving it

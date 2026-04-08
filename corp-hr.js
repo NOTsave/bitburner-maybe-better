@@ -1,4 +1,5 @@
 import { getNsDataThroughFile, log, formatMoney, getCachedCorpData, handleCorpError, safeCorpOperation, getTobaccoDivision, isDivisionValid, asleep } from './helpers.js'
+import { calculateOptimalPartyCost, calculatePerfMult } from './corp-helpers.js'
 
 // Fix #6: Global Constant Definitions
 const CORP_CONFIG = {
@@ -99,12 +100,30 @@ async function manageMorale(ns, corp, now, lastTeaTime, lastPartyTime) {
                     teaPerformed = true;
                 }
                 
-                // Fix #2: Party for big boost (every 60s)
+                // Fix #2: Party for big boost (every 60s) - use OPTIMAL cost calculation from guide
                 if (now - lastPartyTime > HR_CONFIG.partyInterval && office.avgMorale < HR_CONFIG.moraleThreshold) {
-                    // Fix #6: Use constant instead of magic number
+                    // Calculate optimal party cost using formula from corp guide
+                    const perfMult = calculatePerfMult(
+                        office.numEmployees || office.employees || 0,
+                        office.employeeJobs?.['Intern'] || 0,
+                        corp.funds,
+                        (div.lastCycleRevenue || 0) > (div.lastCycleExpenses || 0)
+                    );
+                    
+                    const optimalPartyCost = calculateOptimalPartyCost(
+                        office.avgMorale,
+                        office.maxMorale || 100,
+                        perfMult
+                    );
+                    
+                    // Total cost = per-employee cost * number of employees
+                    const totalPartyCost = optimalPartyCost * (office.numEmployees || office.employees || 1);
+                    
                     await cc(ns, 'ns.corporation.throwParty(ns.args[0], ns.args[1], ns.args[2])', 
-                        [div.name, city, CORP_CONFIG.PARTY_COST]);
+                        [div.name, city, totalPartyCost]);
                     partyPerformed = true;
+                    
+                    log(ns, `INFO: Party ${div.name}/${city}: ${formatMoney(totalPartyCost)} (optimal ${formatMoney(optimalPartyCost)}/emp)`, false, 'info');
                 }
                 
             } catch (e) {

@@ -141,6 +141,10 @@ export async function main(ns) {
         // Why? Because this creates "Temp files", and we want to keep the save file as small as possible for fast saves and reloads.
         //      We use an empty temp folder as a sign that we previously ran and killed all scripts and can safely proceed.
 
+        // Pre-check: Ensure we have enough money to travel before entering retry loop
+        if (ns.getPlayer().money < 200000)
+            return log(ns, "ERROR: You need at least $200k to travel to the casino.", true, 'error');
+
         // Step 2: Try to navigate to the blackjack game (with retries in case of transient errors)
         let priorAttempts = 0;
         while (true) {
@@ -153,8 +157,6 @@ export async function main(ns) {
 
                 // Step 2.2: Go to Aevum if we aren't already there. (Must be done manually if you don't have SF4)
                 if (ns.getPlayer().city != "Aevum") {
-                    if (ns.getPlayer().money < 200000)
-                        throw new Error("Sorry, you need at least 200k to travel to the casino.");
                     let travelled = false;
                     try {
                         travelled = await getNsDataThroughFile(ns, 'ns.singularity.travelToCity(ns.args[0])', null, ["Aevum"]);

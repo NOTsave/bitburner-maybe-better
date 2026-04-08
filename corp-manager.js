@@ -1,4 +1,5 @@
 import { log, disableLogs, getNsDataThroughFile, formatMoney, getCachedCorpData, calculateRamUsage, getRunningModules, getTobaccoDivision, isDivisionValid, DEFAULT_CORP_DATA_PATH, asleep } from './helpers.js'
+import { calculateOptimalDummyDivisions, calculateDummyDivisionOfferBoost, DUMMY_DIVISION_CONFIG } from './corp-helpers.js'
 
 const STATE_FILE = '/Temp/corp-state.txt';
 const PROTECT_FILE = '/Temp/corp-protection.txt';
@@ -215,6 +216,18 @@ export async function main(ns) {
             };
             await ns.write(PROTECT_FILE, JSON.stringify(heartbeat), 'w');
 
+            // --- PHASE ADVANCEMENT WITH RP THRESHOLDS ---
+            // Check every 60 seconds if we can advance to next phase (per corp strategy guide)
+            if (!state.lastPhaseCheck || Date.now() - state.lastPhaseCheck > 60000) {
+                state = await maybeAdvancePhase(ns, state);
+                state.lastPhaseCheck = Date.now();
+            }
+            
+            // --- DUMMY DIVISION CREATION (Investment Round Boost) ---
+            // Creates cheap Restaurant divisions to boost valuation before investment rounds
+            // Formula: Valuation *= (1.1^12)^NumberOfOfficesAndWarehouses
+            await maybeCreateDummyDivisions(ns, state, corp);
+            
             // --- INTELLIGENT MODULE MANAGEMENT WITH SELF-TERMINATION ---
             await manageModulesWithSelfTermination(ns, state);
             
@@ -396,21 +409,227 @@ async function terminateModule(ns, filename, moduleName) {
     }
 }
 
+// RP thresholds per corp strategy guide
+const RP_THRESHOLDS = {
+    1: { Agriculture: 55, Chemical: 0 },        // Round 1: Agri 55 RP before production
+    2: { Agriculture: 700, Chemical: 390 },       // Round 2: Agri 700, Chem 390 RP
+    3: { Agriculture: 1000, Chemical: 500 }       // Round 3+: Minimum RP stockpile
+};
+
+/** Check if we have enough RP to advance to next phase
+ * @param {NS} ns 
+ * @param {Object} corp - Cached corp data
+ * @param {number} targetPhase - Phase we want to advance to
+ * @returns {Promise<boolean>} True if RP thresholds met */
+async function checkRPThresholds(ns, corp, targetPhase) {
+    const thresholds = RP_THRESHOLDS[targetPhase];
+    if (!thresholds) return true; // No threshold defined for this phase
+    
+    for (const [divType, requiredRP] of Object.entries(thresholds)) {
+        if (requiredRP === 0) continue; // No requirement
+        
+        const division = corp.divisions.find(d => d.type === divType);
+        if (!division) {
+            log(ns, `RP Check: ${divType} division not found (required: ${requiredRP} RP)`, false, 'warning');
+            return false; // Division doesn't exist yet
+        }
+        
+        const currentRP = division.researchPoints || 0;
+        if (currentRP < requiredRP) {
+            log(ns, `RP Check: ${division.name} has ${currentRP.toLocaleString()} RP, need ${requiredRP.toLocaleString()} to advance to phase ${targetPhase}`, false, 'info');
+            return false;
+        }
+    }
+    
+    return true;
+}
+
+/** Advance to next phase if RP thresholds are met
+ * @param {NS} ns 
+ * @param {Object} state - Current state
+ * @returns {Promise<Object>} Updated state */
+async function maybeAdvancePhase(ns, state) {
+    const corp = await getCachedCorpData(ns);
+    if (!corp) return state;
+    
+    const nextPhase = state.phase + 1;
+    const canAdvance = await checkRPThresholds(ns, corp, nextPhase);
+    
+    if (canAdvance && nextPhase <= 5) {
+        state.phase = nextPhase;
+        // Reset dummy division flag for new phase (allow creating more dummies for next round)
+        state.dummyDivisionsCreated = false;
+        await persistState(ns, state, 'advancePhase');
+        log(ns, `SUCCESS: Advanced to phase ${nextPhase}`, true, 'success');
+    }
+    
+    return state;
+}
+
+// ============================================================================
+// DUMMY DIVISION MANAGEMENT
+// Creates cheap Restaurant divisions to boost investment offer valuation
+// Formula: Valuation *= (1.1^12)^NumberOfOfficesAndWarehouses
+// ============================================================================
+
+/** 
+ * Manage dummy divisions for investment round boost
+ * Creates Restaurant divisions (cheapest at 10B) with 6 cities + warehouses only
+ * No employees, no upgrades, no boost materials - pure valuation boost
+ * 
+ * @param {NS} ns
+ * @param {Object} corp - Corporation data
+ * @param {number} fundingRound - Current funding round (1-4)
+ */
+async function manageDummyDivisions(ns, corp, fundingRound = 1) {
+    // Skip if we don't have enough funds or not in right phase
+    if (corp.funds < 100e9) return; // Need at least 100B to consider
+    
+    // Check current dummy division count
+    const existingDummies = corp.divisions.filter(d => d.type === DUMMY_DIVISION_CONFIG.industry).length;
+    const maxDummies = 3; // Cap at 3 to prevent excessive spending
+    
+    if (existingDummies >= maxDummies) return;
+    
+    // Calculate optimal number of new dummy divisions
+    const desiredNewDummies = calculateOptimalDummyDivisions(corp.funds, 100e9, maxDummies - existingDummies);
+    if (desiredNewDummies <= 0) return;
+    
+    // Calculate impact before creating
+    const boost = calculateDummyDivisionOfferBoost(corp.valuation || 1e12, desiredNewDummies, fundingRound);
+    
+    if (!boost.isProfitable) {
+        log(ns, `INFO: Dummy divisions not profitable yet (net benefit: ${formatMoney(boost.netBenefit)})`, false, 'info');
+        return;
+    }
+    
+    log(ns, `SUCCESS: Creating ${desiredNewDummies} dummy divisions to boost offer by ${boost.offerIncreasePercent.toFixed(1)}%`, true, 'success');
+    
+    // Create dummy divisions
+    for (let i = 0; i < desiredNewDummies; i++) {
+        const divName = `Dummy-${Date.now() % 10000}-${i}`;
+        
+        try {
+            // 1. Create Restaurant division (10B)
+            await getNsDataThroughFile(ns, 'ns.corporation.expandIndustry(ns.args[0], ns.args[1])', null, 
+                [DUMMY_DIVISION_CONFIG.industry, divName]);
+            log(ns, `SUCCESS: Created dummy division ${divName}`, false, 'success');
+            await asleep(ns, 2000);
+            
+            // 2. Expand to all 6 cities
+            for (const city of DUMMY_DIVISION_CONFIG.cities) {
+                try {
+                    // Skip Sector-12 (already exists)
+                    if (city === 'Sector-12') continue;
+                    
+                    await getNsDataThroughFile(ns, 'ns.corporation.expandCity(ns.args[0], ns.args[1])', null, 
+                        [divName, city]);
+                    log(ns, `INFO: Expanded ${divName} to ${city}`, false, 'info');
+                    await asleep(ns, 1000);
+                } catch (e) {
+                    // City might already exist, continue
+                    continue;
+                }
+            }
+            
+            // 3. Buy warehouses in each city (10B each)
+            for (const city of DUMMY_DIVISION_CONFIG.cities) {
+                try {
+                    await getNsDataThroughFile(ns, 'ns.corporation.purchaseWarehouse(ns.args[0], ns.args[1])', null, 
+                        [divName, city]);
+                    log(ns, `INFO: Warehouse ${divName}/${city}`, false, 'info');
+                    await asleep(ns, 1000);
+                } catch (e) {
+                    // Warehouse might already exist, continue
+                    continue;
+                }
+            }
+            
+            // 4. Enable Smart Supply (cheap unlock, makes it hands-off)
+            const hasSmartSupply = await getNsDataThroughFile(ns, 'ns.corporation.hasUnlock(ns.args[0])', null, ['Smart Supply']);
+            if (hasSmartSupply) {
+                for (const city of DUMMY_DIVISION_CONFIG.cities) {
+                    try {
+                        await getNsDataThroughFile(ns, 'ns.corporation.setSmartSupply(ns.args[0], ns.args[1], true)', null, 
+                            [divName, city]);
+                    } catch (e) {
+                        // May fail if no warehouse or other issue, continue
+                        continue;
+                    }
+                }
+            }
+            
+            log(ns, `SUCCESS: Dummy division ${divName} ready (valuation boost active)`, false, 'success');
+            
+        } catch (e) {
+            log(ns, `ERROR: Failed to create dummy division ${divName}: ${e.message || e}`, false, 'error');
+            // Continue to next dummy even if this one failed
+            continue;
+        }
+    }
+}
+
+/**
+ * Check if we should create dummy divisions based on investment round timing
+ * Call this before accepting investment offers for maximum benefit
+ * 
+ * @param {NS} ns
+ * @param {Object} state - Current corp state
+ * @param {Object} corp - Corporation data
+ */
+async function maybeCreateDummyDivisions(ns, state, corp) {
+    // Only create dummies in phases 2+ (when we're preparing for investment rounds)
+    if (state.phase < 2) return;
+    
+    // Check if we've already created dummies this phase
+    if (state.dummyDivisionsCreated) return;
+    
+    // Detect funding round from corporation state
+    // Simple heuristic: check if we have pending investment offer
+    const hasOffer = corp.investmentOffers && corp.investmentOffers.length > 0;
+    const fundingRound = hasOffer ? (corp.investmentOffers[0]?.round || 1) : state.phase;
+    
+    // Create dummy divisions
+    await manageDummyDivisions(ns, corp, fundingRound);
+    
+    // Mark as created for this phase (reset when advancing phase)
+    state.dummyDivisionsCreated = true;
+    await persistState(ns, state, 'dummyDivisions');
+}
+
 function shouldModuleRun(ns, name, config, state, availableRAM) {
     // Always-on modules
     if (config.alwaysOn) return true;
-    
-    // Phase modules
+
+    // Phase modules - check if we've reached the required phase
     if (config.phase !== undefined) {
         return state.phase >= config.phase;
     }
-    
+
     // Priority modules (when low on RAM)
     if (availableRAM < 5) {
         return config.priority <= 1;
     }
-    
+
     return true;
+}
+
+/** Centralized state persistence to prevent race conditions
+ * @param {NS} ns
+ * @param {Object} state - State to persist
+ * @param {string} context - Context for debug logging
+ * @returns {Promise<boolean>} Success status */
+async function persistState(ns, state, context = '') {
+    try {
+        await ns.write(STATE_FILE, JSON.stringify(state), 'w');
+        if (context) {
+            log(ns, `DEBUG: State persisted (${context}): phase=${state.phase}`, false, 'debug');
+        }
+        return true;
+    } catch (e) {
+        log(ns, `ERROR: Failed to persist state: ${e.message || e}`, false, 'error');
+        return false;
+    }
 }
 
 // Remove duplicate functions - use imported ones from helpers.js

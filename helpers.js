@@ -387,8 +387,7 @@ export async function runCommand_Custom(ns, fnRun, command, fileName, args = [],
         if (oldContents != script) {
             if (oldContents) // Create some noise if temp scripts are being created with the same name but different contents
                 ns.tprint(`WARNING: Had to overwrite temp script ${fileName}\nOld Contents:\n${oldContents}\nNew Contents:\n${script}` +
-                    `\nThis warning is generated as part of an effort to switch over to using only 'immutable' temp scripts. ` +
-                    `Please paste a screenshot in Discord at https://discord.com/channels/415207508303544321/935667531111342200`);
+                    `\n(This warning appears when temp scripts with the same name but different contents are being created)`);
             ns.write(fileName, script, "w");
             // Wait for the script to appear and be readable (game can be finicky on actually completing the write)
             await autoRetry(ns, () => ns.read(fileName), c => c == script, () => `Temporary script ${fileName} is not available, ` +
@@ -1018,7 +1017,7 @@ export const COMPANY_DATA_PATH = '/Temp/company-data.json';
 export const HACKNET_DATA_PATH = '/Temp/hacknet-data.json';
 export const GANG_DATA_PATH = '/Temp/gang-data.json';
 export const STOCK_DATA_PATH = '/Temp/stock-data.json';
-export const STOCK_PROBABILITIES_PATH = '/Temp/stock-probabilities.json';
+export const STOCK_PROBABILITIES_PATH = '/Temp/stock-probabilities.txt';
 /**
  * Optimized cache reader with tiered TTL system
  * @param {NS} ns 

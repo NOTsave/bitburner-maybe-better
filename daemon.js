@@ -373,12 +373,12 @@ export async function main(ns) {
         asynchronousHelpers = [
             { name: "stats.js", shouldRun: () => reqRam(64), shouldTail: false }, // Adds stats not usually in the HUD (nice to have)
             { name: "go.js", shouldRun: () => reqRam(64), minRamReq: 20.2 }, // Play go.js (various multipliers, but large dynamic ram requirements)
-            { name: "stockmaster.js", shouldRun: () => reqRam(64), args: openTailWindows ? ["--show-market-summary"] : [] }, // Start our stockmaster
+            { name: "stockmaster.js", shouldRun: () => reqRam(64) && (homeServer?.ramAvailable(true) ?? 999) >= 32, minRamReq: 32, args: openTailWindows ? ["--show-market-summary"] : [] }, // Start our stockmaster
             { name: "hacknet-upgrade-manager.js", shouldRun: () => shouldUpgradeHacknet(), args: ["-c", "--max-payoff-time", "1h", "--interval", "0"], shouldTail: false }, // One-time kickstart of hash income by buying everything with up to 1h payoff time immediately
             { name: "spend-hacknet-hashes.js", shouldRun: () => reqRam(64) && 9 in dictSourceFiles, args: [], shouldTail: false }, // Always have this running to make sure hashes aren't wasted
             { name: "sleeve.js", shouldRun: () => reqRam(64) && 10 in dictSourceFiles }, // Script to create manage our sleeves for us
             { name: "gangs.js", shouldRun: () => reqRam(64) && 2 in dictSourceFiles }, // Script to create manage our gang for us
-            { name: "corp-fetcher.js", shouldRun: () => true, args: [], shouldTail: false }, // Always run corp data fetcher for enterprise system
+            { name: "corp-fetcher.js", shouldRun: () => (bitNodeN === 3 || 3 in dictSourceFiles) && bitNodeN !== 8, args: [], shouldTail: false }, // Corp API requires BN3 or SF3. Disabled in BN8
             {
                 name: "work-for-factions.js", args: ['--fast-crimes-only', '--no-coding-contracts'],  // Singularity script to manage how we use our "focus" work.
                 shouldRun: () => 4 in dictSourceFiles && reqRam(256 / (2 ** dictSourceFiles[4]) && !studying) // Higher SF4 levels result in lower RAM requirements
@@ -1003,7 +1003,10 @@ export async function main(ns) {
                 //log(ns, 'targeting: ' + targeting.map(s => s.name).join(', '))
             } catch (err) {
                 // Sometimes a script is shut down by throwing an object containing internal game script info. Detect this and exit silently
-                if (err?.env?.stopFlag) return;
+                if (err?.env?.stopFlag) {
+                    log(ns, `INFO: daemon.js detected game stop flag, exiting targeting loop`, false, 'info');
+                    return;
+                }
                 log(ns, `WARNING: daemon.js Caught an error in the targeting loop: ${getErrorInfo(err)}`, true, 'warning');
                 continue;
             }
@@ -1087,6 +1090,7 @@ export async function main(ns) {
         /** @param {NS} ns
          * @param {string} node - a.k.a host / server **/
         constructor(ns, node) {
+            this.ns = ns;
             this.name = node;
             this.server = dictInitialServerInfos[node];
             this.requiredHackLevel = dictServerRequiredHackinglevels[node];

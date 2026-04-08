@@ -1,7 +1,7 @@
 /** @param {NS} ns **/
 export async function main(ns) {
     // Whitelist: Protect corporate communication and essential data
-    const PROTECTED_PREFIXES = ['corp-', 'permanent-'];
+    const PROTECTED_PREFIXES = ['corp-', 'permanent-', 'stock-'];
     const TEMP_DIR = 'Temp/';
     
     // Enhanced path safety validation to prevent directory traversal
@@ -85,7 +85,7 @@ export async function main(ns) {
             }
             
             // Additional safety: don't delete critical system files
-            const CRITICAL_FILES = ['reserve.txt', 'daemon-running.txt', 'corp-state.txt'];
+            const CRITICAL_FILES = ['reserve.txt', 'daemon-running.txt', 'corp-state.txt', 'stock-probabilities.txt', 'stock-summary.txt'];
             if (CRITICAL_FILES.includes(filename)) {
                 ns.print(`INFO: Critical file protected: ${filename}`);
                 continue;

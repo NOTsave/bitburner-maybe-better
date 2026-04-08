@@ -1,7 +1,7 @@
-import { 
+import {
     log, sysLog, getConfiguration, instanceCount, getNsDataThroughFile, runCommand, waitForProcessToComplete,
     getActiveSourceFiles, tryGetBitNodeMultipliers, getStocksValue, unEscapeArrayArgs,
-    formatMoney, formatDuration, formatNumber, getErrorInfo, tail, jsonReplacer, getFilePath, DEFAULT_CORP_DATA_PATH, getCachedCorpData
+    formatMoney, formatDuration, formatNumber, getErrorInfo, tail, jsonReplacer, getFilePath, getAtomicPath, disableLogs, getJitteredSleep, GENERIC_TEMP_PATH, formatNumberShort
 } from './helpers.js';
 
 const factionDataPath = getAtomicPath('faction-stats');
@@ -914,7 +914,7 @@ export async function workForSingleFaction(ns, factionName, forceUnlockDonations
                 `earning ${formatNumberShort(repGainRate)} rep/sec. ` +
                 (hasFocusPenalty && !shouldFocus ? '(after 20% non-focus Penalty) ' : '') + `(ETA: ${formatDuration(eta_milliseconds)})`);
         }
-        await tryBuyReputation(ns);
+        await tryBuyReputation(ns, factionName);
         await ns.sleep(getJitteredSleep());
         if (!forceBestAug && !forceRep) { // Detect our rep requirement decreasing (e.g. if we exported for our daily +1 faction rep)
             let currentFavor = await getCurrentFactionFavour(ns, factionName);
@@ -976,4 +976,81 @@ async function measureCompanyRepGainRate(ns, companyName) {
  * @returns {Promise<FactionWorkType>} The faction work type measured to give the best reputation gain rate */
 async function findBestFactionWork(ns, factionName) {
     return await waitForFactionInvite(ns, factionName);
+}
+
+/** Work for a megacorp company to earn their faction invite
+ * @param {NS} ns
+ * @param {string} factionName The megacorp faction name
+ * @param {boolean} workForFaction Whether to also work for the faction after getting invited
+ * @returns {Promise<boolean>} True if new work was done/invite earned */
+async function workForMegacorpFactionInvite(ns, factionName, workForFaction = false) {
+    const companyName = factionName; // Megacorp factions are named after their company
+    const player = await getPlayerInfo(ns);
+    const joinedFactions = player.factions;
+    if (joinedFactions.includes(factionName)) return false; // Already joined
+    // Work for the company to earn the invite
+    return await earnFactionInvite(ns, factionName);
+}
+
+/** Work for all megacorps to earn their faction invites
+ * @param {NS} ns
+ * @param {string[]} factionNames Array of megacorp faction names
+ * @param {boolean} workForFaction Whether to work for faction rep after getting invited
+ * @returns {Promise<void>} */
+async function workForAllMegacorps(ns, factionNames, workForFaction = false) {
+    for (const faction of factionNames) {
+        if (breakToMainLoop()) break;
+        await workForMegacorpFactionInvite(ns, faction, workForFaction);
+        if (workForFaction) await workForSingleFaction(ns, faction);
+    }
+}
+
+/** Detect the best faction work type by measuring rep gain rates
+ * @param {NS} ns
+ * @param {string} factionName The faction to test work types for
+ * @returns {Promise<string>} The best faction work type (e.g., 'hacking', 'field', 'security') */
+async function detectBestFactionWork(ns, factionName) {
+    const workTypes = ['hacking', 'field', 'security'];
+    let bestWork = 'hacking';
+    let bestRate = 0;
+    for (const work of workTypes) {
+        if (breakToMainLoop()) break;
+        // Try this work type briefly
+        await startWorkForFaction(ns, factionName, work, false);
+        await ns.sleep(1000); // Brief sample period
+        const rate = await measureFactionRepGainRate(ns, factionName);
+        if (rate > bestRate) {
+            bestRate = rate;
+            bestWork = work;
+        }
+    }
+    return bestWork;
+}
+
+/** Try to buy reputation with a faction if donations are unlocked
+ * @param {NS} ns
+ * @param {string} factionName The faction to donate to
+ * @param {number} moneyAvailable How much money we can spend (defaults to player money)
+ * @returns {Promise<number>} The amount of reputation purchased */
+async function tryBuyReputation(ns, factionName, moneyAvailable) {
+    if (moneyAvailable === undefined) {
+        const player = await getPlayerInfo(ns);
+        moneyAvailable = player.money;
+    }
+    if (!factionName) return 0; // No faction specified, skip
+    // Check if we can donate to this faction (do comparison locally to avoid temp script collision)
+    const favor = await getCurrentFactionFavour(ns, factionName);
+    const canDonate = favor >= favorToDonate;
+    if (!canDonate) return 0;
+    // Calculate how much rep we could buy (1 rep costs $1b / favor)
+    const costPerRep = 1e9 / favor;
+    const repToBuy = Math.floor(moneyAvailable / costPerRep);
+    if (repToBuy <= 0) return 0;
+    const donationAmount = repToBuy * costPerRep;
+    const success = await getNsDataThroughFile(ns, `ns.singularity.donateToFaction(ns.args[0], ns.args[1])`, null, [factionName, donationAmount]);
+    if (success) {
+        log(ns, `SUCCESS: Donated ${formatMoney(donationAmount)} to ${factionName} for ${formatNumberShort(repToBuy)} reputation`, false, 'success');
+        return repToBuy;
+    }
+    return 0;
 }

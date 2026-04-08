@@ -1,8 +1,9 @@
 import {
     log, getConfiguration, instanceCount, getNsDataThroughFile, runCommand, waitForProcessToComplete,
     getActiveSourceFiles, tryGetBitNodeMultipliers, getStocksValue, unEscapeArrayArgs,
-    formatMoney, formatDuration, formatNumber, getErrorInfo, tail, jsonReplacer, getFilePath, DEFAULT_CORP_DATA_PATH, getCachedCorpData, maximizeDividends, TIMEOUT
+    formatMoney, formatDuration, formatNumber, getErrorInfo, tail, jsonReplacer, getFilePath, DEFAULT_CORP_DATA_PATH, getCachedCorpData, TIMEOUT, getStockSymbols
 } from './helpers.js'
+import { maximizeDividends } from './corp-helpers.js'
 
 const argsSchema = [
     ['install-augmentations', false], // By default, augs will only be purchased. Set this flag to install (a.k.a reset)

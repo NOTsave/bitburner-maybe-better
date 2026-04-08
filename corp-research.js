@@ -1,21 +1,33 @@
 import { getNsDataThroughFile, log, formatMoney, getCachedCorpData, asleep } from './helpers.js'
 
 // Priority research for maximum efficiency
+// CORRECTED per corp strategy guide: Costs are in RP (research points), not dollars
+// Priority order: Hi-Tech R&D Lab -> Overclock -> Sti.mu -> Auto Drug -> Go-Juice -> CPH4 -> Market-TA
 const RESEARCH_PRIORITY = [
-    // --- Tobacco priority ---
-    { name: 'Hi-Tech R&D Laboratory', cost: 500e9, priority: 1, divisions: ['Tobacco'] },
-    { name: 'Market-TA.I', cost: 250e9, priority: 2, divisions: ['Tobacco'] },
-    { name: 'Market-TA.II', cost: 1e12, priority: 3, divisions: ['Tobacco'] },
-    { name: 'uBiome', cost: 1e12, priority: 4, divisions: ['Tobacco'] },
-    { name: 'AutoBrew', cost: 250e9, priority: 5, divisions: ['Tobacco'] },
-    { name: 'Go-Juice', cost: 100e9, priority: 6, divisions: ['Tobacco'] },
-    { name: 'CPH4 Injections', cost: 750e9, priority: 7, divisions: ['Tobacco'] },
+    // --- Universal priority (all divisions) ---
+    { name: 'Hi-Tech R&D Laboratory', cost: 5000, priority: 1, divisions: ['Tobacco', 'Agriculture', 'Chemical'] },
     
-    // --- Agriculture priority ---
-    { name: 'Smart Supply', cost: 50e9, priority: 1, divisions: ['Agriculture'] },
-    { name: 'Smart Storage', cost: 100e9, priority: 2, divisions: ['Agriculture'] },
-    { name: 'DreamSense', cost: 200e9, priority: 3, divisions: ['Agriculture'] },
-    { name: 'Wilson', cost: 500e9, priority: 4, divisions: ['Agriculture'] }
+    // --- Employee stats priority (Overclock -> Sti.mu -> CPH4 chain) ---
+    { name: 'Overclock', cost: 15000, priority: 2, divisions: ['Tobacco', 'Agriculture'] },
+    { name: 'Sti.mu', cost: 30000, priority: 3, divisions: ['Tobacco', 'Agriculture'] },
+    { name: 'Automatic Drug Administration', cost: 10000, priority: 4, divisions: ['Tobacco', 'Agriculture'] },
+    { name: 'Go-Juice', cost: 25000, priority: 5, divisions: ['Tobacco', 'Agriculture'] },
+    { name: 'CPH4 Injections', cost: 25000, priority: 6, divisions: ['Tobacco', 'Agriculture'] },
+    
+    // --- Market-TA (only if no custom script) - low priority ---
+    { name: 'Market-TA.I', cost: 20000, priority: 10, divisions: ['Tobacco'] },
+    { name: 'Market-TA.II', cost: 50000, priority: 11, divisions: ['Tobacco'] },
+    
+    // --- Production boosters ---
+    { name: 'Drones', cost: 5000, priority: 7, divisions: ['Tobacco', 'Agriculture'] },
+    { name: 'Drones - Assembly', cost: 25000, priority: 8, divisions: ['Tobacco', 'Agriculture'] },
+    { name: 'Self-Correcting Assemblers', cost: 25000, priority: 9, divisions: ['Tobacco', 'Agriculture'] },
+    { name: 'Drones - Transport', cost: 30000, priority: 10, divisions: ['Tobacco', 'Agriculture'] },
+    
+    // --- Optional/late-game ---
+    { name: 'uPgrade: Fulcrum', cost: 10000, priority: 12, divisions: ['Tobacco'] },
+    { name: 'uBiome', cost: 1e12, priority: 99, divisions: ['Tobacco'] }, // Very expensive, late-game only
+    { name: 'DreamSense', cost: 200e9, priority: 99, divisions: ['Agriculture'] } // Uses fund cost
 ];
 
 // Research module configuration with self-termination
@@ -23,7 +35,7 @@ const RESEARCH_CONFIG = {
     checkInterval: 30000,        // Check every 30s
     minRPBuffer: 10000,         // Minimum RP reserve
     fundReserve: 5e9,         // 5B reserve
-    maxSpendPercent: 0.3,       // Max 30% of funds on research
+    maxSpendPercent: 0.2,       // Max 20% of RP for stats/energy upgrades, 10% for production (per corp advice)
     selfTerminate: true,           // Self-termination after research completion
     completionConditions: [        // Conditions for self-termination
         { type: 'research_complete', operator: 'all', divisions: ['Tobacco'] },  // All Tobacco research complete
