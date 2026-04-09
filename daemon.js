@@ -2051,6 +2051,7 @@ export async function main(ns) {
         Object.keys(serverStockSymbols).forEach(server => {
             const sym = serverStockSymbols[server];
             const pos = updatedPositions[sym];
+            if (!pos) return; // Stock no longer in positions (was sold/removed)
             newShouldManipulateGrow[server] = pos.sharesLong > 0 ? true : pos.prob >= 0.5; // If bullish, grow should be made to influence stock
             newShouldManipulateHack[server] = pos.sharesShort > 0 ? true : pos.prob < 0.5; // If bearish, hack should be made to influence stock
             if (pos.sharesLong > 0 || pos.sharesShort > 0) newServersWithOwnedStock.push(server); // Keep track of servers we own stock in so we can prioritize hacking them in stockFocus mode

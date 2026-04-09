@@ -48,6 +48,7 @@ export function autocomplete(data, args) {
 export async function main(ns) {
     const persistentLog = "log.autopilot.txt";
     const factionManagerOutputFile = "/Temp/affordable-augs.txt"; // Temp file produced by faction manager with status information
+    const casinoDoneFile = "/Temp/autopilot-casino-done.txt"; // File to persist casino completion state across restarts
     const defaultBnOrder = [ // The order in which we intend to play bitnodes
         // 1st Priority: Key new features and/or major stat boosts
         4.3,  // Normal. Need singularity to automate everything, and need the API costs reduced from 16x -> 4x -> 1x reliably do so from the start of each BN
@@ -90,7 +91,7 @@ export async function main(ns) {
     let playerInGang = false, rushGang = false; // Tells us whether we're should be trying to work towards getting into a gang
     let playerInBladeburner = false; // Whether we've joined bladeburner
     let wdHack = (/**@returns{null|number}*/() => null)(); // If the WD server is available (i.e. TRP is installed), caches the required hack level
-    let ranCasino = false; // Flag to indicate whether we've stolen 10b from the casino yet
+    let ranCasino = ns.fileExists(casinoDoneFile); // Flag to indicate whether we've stolen 10b from the casino yet (persisted to file)
     let casinoState = { running: false, pid: 0 }; // Unified casino state tracking
     const CASINO_THRESHOLD = 10 * 1e9; // Fix 4: Constant for Magic Number
     let reservedPurchase = 0; // The amount of player money that has been reserved to purchase augmentations
@@ -772,6 +773,7 @@ export async function main(ns) {
         // Check if we already hit the target money
         if (player.money >= CASINO_THRESHOLD) {
             ranCasino = true;
+            ns.write(casinoDoneFile, "done", "w"); // Persist completion state
             casinoState = { running: false, pid: 0 };
             return;
         }
@@ -789,6 +791,7 @@ export async function main(ns) {
                 if (alive) ns.scriptKill("casino.js", "home");
                 casinoState = { running: false, pid: 0 };
                 ranCasino = true; // Mark as completed when goal reached
+                ns.write(casinoDoneFile, "done", "w"); // Persist completion state
             }
             return; // Exit early if we're monitoring an existing process
         }

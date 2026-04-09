@@ -1168,9 +1168,14 @@ export async function safelyWriteData(ns, path, data) {
             throw new Error(`Data too large: ${serialized.length} bytes`);
         }
         
+        // Defensive: try to remove file first if it exists (handles locked/corrupted files)
+        if (ns.fileExists(path)) {
+            ns.rm(path);
+        }
+        
         // Atomic write: overwrite directly is safer than rm+rename in Bitburner
         // ns.write() is atomic for existing files in the game engine
-        const success = ns.write(path, serialized, 'w');
+        const success = await ns.write(path, serialized, 'w');
         
         if (!success) {
             throw new Error('Failed to write file');

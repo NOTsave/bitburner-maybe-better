@@ -452,6 +452,8 @@ export async function main(ns) {
         }
     }
 
+    const CASINO_DONE_FILE = "/Temp/autopilot-casino-done.txt"; // Must match autopilot.js
+
     /** @param {NS} ns
      *  @param {boolean} kickedOutAfterPlaying (default: true) set to false if we detected having been kicked out before we even started.
      *  Run when we can no longer gamble at the casino (presumably because we've been kicked out) **/
@@ -466,6 +468,9 @@ export async function main(ns) {
             const terminalNav = await tryfindElement("//div[(@role = 'button') and (contains(., 'Terminal'))]");
             if (terminalNav) await click(terminalNav);
         } catch (err) { log(ns, `WARNING: Failed to route to the terminal: ${getErrorInfo(err)}`, false); }
+
+        // Write completion file BEFORE launching the completion script to prevent restart loops
+        ns.write(CASINO_DONE_FILE, "done", "w");
 
         // Run the completion script before shutting down
         let completionScript = options['on-completion-script'];
