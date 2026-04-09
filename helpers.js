@@ -480,7 +480,7 @@ export async function autoRetry(ns, fnFunctionThatMayFail, fnSuccessCondition, e
     if (verbose == null) verbose = false; if (tprintFatalErrors == null) tprintFatalErrors = true; if (silent == null) silent = false;
     checkNsInstance(ns, '"autoRetry"');
     let retryDelayMs = initialRetryDelayMs, attempts = 0;
-    let sucessConditionMet;
+    let successConditionMet;
     while (attempts++ <= maxRetries) {
         // Sleep between attempts
         if (attempts > 1) {
@@ -488,13 +488,13 @@ export async function autoRetry(ns, fnFunctionThatMayFail, fnSuccessCondition, e
             retryDelayMs *= backoffRate;
         }
         try {
-            sucessConditionMet = true;
+            successConditionMet = true;
             const result = await fnFunctionThatMayFail()
             // Check if this is considered a successful result
-            sucessConditionMet = fnSuccessCondition(result);
-            if (sucessConditionMet instanceof Promise)
-                sucessConditionMet = await sucessConditionMet; // If fnSuccessCondition was async, await its result
-            if (!sucessConditionMet) {
+            successConditionMet = fnSuccessCondition(result);
+            if (successConditionMet instanceof Promise)
+                successConditionMet = await successConditionMet; // If fnSuccessCondition was async, await its result
+            if (!successConditionMet) {
                 // If we have not yet reached our maximum number of retries, we can continue, without throwing
                 if (attempts < maxRetries) {
                     if (!silent) log(ns, `INFO: Attempt ${attempts} of ${maxRetries} failed. Trying again in ${retryDelayMs}ms...`, false, !verbose ? undefined : 'info');

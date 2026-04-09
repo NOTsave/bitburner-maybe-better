@@ -3,6 +3,8 @@ import {
     runCommand, getNsDataThroughFile, formatMoney, getErrorInfo, tail
 } from './helpers.js'
 
+const CASINO_DONE_FILE = "/Temp/autopilot-casino-done.txt"; // Must match autopilot.js
+
 const argsSchema = [
     ['save-sleep-time', 10], // Time to sleep in milliseconds before and after saving. If you are having trouble with your automatic saves not "taking effect" try increasing this.
     ['click-sleep-time', 5], // Time to sleep in milliseconds before and after clicking any button (or setting text). Increase if clicks don't appear to be "taking effect".
@@ -11,7 +13,7 @@ const argsSchema = [
     ['enable-logging', false], // Set to true to pop up a tail window and generate logs.
     ['kill-all-scripts', false], // Set to true to kill all running scripts before running.
     ['no-deleting-remote-files', false], // By default, if --kill-all-scripts, we will also remove remote files to speed up save/reload
-    ['on-completion-script', ''], // Spawn this script when max-charges is reached
+    ['on-completion-script', null], // Spawn this script when max-charges is reached
     ['on-completion-script-args', []], // Optional args to pass to the script when launched
 ];
 export function autocomplete(data, args) {
@@ -141,10 +143,6 @@ export async function main(ns) {
         // Why? Because this creates "Temp files", and we want to keep the save file as small as possible for fast saves and reloads.
         //      We use an empty temp folder as a sign that we previously ran and killed all scripts and can safely proceed.
 
-        // Pre-check: Ensure we have enough money to travel before entering retry loop
-        if (ns.getPlayer().money < 200000)
-            return log(ns, "ERROR: You need at least $200k to travel to the casino.", true, 'error');
-
         // Step 2: Try to navigate to the blackjack game (with retries in case of transient errors)
         let priorAttempts = 0;
         while (true) {
@@ -157,6 +155,8 @@ export async function main(ns) {
 
                 // Step 2.2: Go to Aevum if we aren't already there. (Must be done manually if you don't have SF4)
                 if (ns.getPlayer().city != "Aevum") {
+                    if (ns.getPlayer().money < 200000)
+                        throw new Error("Sorry, you need at least 200k to travel to the casino.");
                     let travelled = false;
                     try {
                         travelled = await getNsDataThroughFile(ns, 'ns.singularity.travelToCity(ns.args[0])', null, ["Aevum"]);
@@ -352,7 +352,7 @@ export async function main(ns) {
                         netWinnings += bet;
                         // Keep tabs of our best winnings, and save the game each time we top it
                         if (netWinnings > peakWinnings) {
-                            peakWinnings = netWinnings
+                            peakWinnings = netWinnings;
                             if (netWinnings > 0)
                                 if (saveSleepTime) await ns.sleep(saveSleepTime);
                             await click(btnSaveGame); // Save if we won
@@ -451,8 +451,6 @@ export async function main(ns) {
             log(ns, 'INFO: Removed all files on other hosts...', true)
         }
     }
-
-    const CASINO_DONE_FILE = "/Temp/autopilot-casino-done.txt"; // Must match autopilot.js
 
     /** @param {NS} ns
      *  @param {boolean} kickedOutAfterPlaying (default: true) set to false if we detected having been kicked out before we even started.
@@ -573,7 +571,7 @@ export async function main(ns) {
                 const errMessage = customErrorMessage ?? `Could not find the element with xpath: \"${logSafeXPath}\"\n` +
                     `Something may have stolen focus or otherwise routed the UI away from the Casino.`;
                 log(ns, 'ERROR: ' + errMessage, true, 'error')
-                throw new Error(errMessage, true, 'error');
+                throw new Error(errMessage);
             }
         } catch (e) {
             if (!expectFailure) throw e;
