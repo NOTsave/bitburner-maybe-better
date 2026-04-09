@@ -93,6 +93,7 @@ export async function main(ns) {
     let wdHack = (/**@returns{null|number}*/() => null)(); // If the WD server is available (i.e. TRP is installed), caches the required hack level
     let ranCasino = ns.fileExists(casinoDoneFile); // Flag to indicate whether we've stolen 10b from the casino yet (persisted to file)
     let casinoState = { running: false, pid: 0 }; // Unified casino state tracking
+    let lastCasinoLog = 0; // Last time we logged about needing casino funds
     const CASINO_THRESHOLD = 10 * 1e9; // Fix 4: Constant for Magic Number
     let reservedPurchase = 0; // The amount of player money that has been reserved to purchase augmentations
     let alreadyJoinedDaedalus = false, autoJoinDaedalusUnavailable = false, reservingMoneyForDaedalus = false, disableStockmasterForDaedalus = false; // Flags to indicate that we should be keeping 100b cash on hand to earn an invite to Daedalus
@@ -799,7 +800,12 @@ export async function main(ns) {
         // Pre-check: Ensure we have enough money for casino travel (200k minimum, 300k buffer to match sleeve reserve)
         const CASINO_SEED_MONEY = 300000;
         if (player.money < CASINO_SEED_MONEY) {
-            log(ns, `INFO: Need ${formatMoney(CASINO_SEED_MONEY)} to run casino, have ${formatMoney(player.money)}. Skipping for now...`, false, 'info');
+            // Only log once per minute to reduce spam
+            const now = Date.now();
+            if (now - lastCasinoLog > 60000) {
+                log(ns, `INFO: Need ${formatMoney(CASINO_SEED_MONEY)} to run casino, have ${formatMoney(player.money)}. Will retry...`, false, 'info');
+                lastCasinoLog = now;
+            }
             return;
         }
 

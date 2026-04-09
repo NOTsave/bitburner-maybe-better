@@ -128,11 +128,13 @@ export async function main(ns) {
                 const stockData = await gatherMarketData(ns);
                 
                 // Write stock data cache for other scripts (atomic write to prevent corruption)
+                // Note: Errors are suppressed (silent=true) as this is non-critical temp data that's refreshed frequently.
+                // If debugging write failures, change silent to false temporarily.
                 const wrappedData = {
                     timestamp: Date.now(),
                     payload: stockData
                 };
-                await safelyWriteData(ns, STOCKS_CACHE_PATH, wrappedData);
+                await safelyWriteData(ns, STOCKS_CACHE_PATH, wrappedData, true);
                 
             } catch (err) {
                 doLog(ns, `WARNING: Stock data gather failed: ${err}`, false, 'warning');
@@ -459,16 +461,18 @@ async function updateForecast(ns, allStocks, has4s) {
     }
     // Write out a file of stock probabilities so that other scripts can make use of this (e.g. hack orchestrator can manipulate the stock market)
     // Note: daemon.js expects a flat object with stock symbols as keys, not wrapped in {timestamp, payload}
+    // Note: Errors are suppressed (silent=true) as this is non-critical temp data refreshed every tick. 
+    // If debugging write failures, change silent to false temporarily.
     const marketData = Object.fromEntries(
         allStocks.map(stk => [stk.sym, { prob: stk.prob, sharesLong: stk.sharesLong, sharesShort: stk.sharesShort }])
     );
     // Write stock probabilities for daemon.js to use for market manipulation (atomic write)
-    await safelyWriteData(ns, STOCK_PROBABILITIES_PATH, marketData);
+    await safelyWriteData(ns, STOCK_PROBABILITIES_PATH, marketData, true);
 }
 
 // Helpers to display the stock market summary in a separate window.
 let summaryFile = STOCK_SUMMARY_PATH;
-let updateForecastFile = async (ns, summary) => await ns.write(summaryFile, summary, 'w');
+let updateForecastFile = async (ns, summary) => await ns.write(summaryFile, summary, 'w') || await ns.write(summaryFile, summary, 'w') || await ns.write(summaryFile, summary, 'w');
 let launchSummaryTail = async ns => {
     let summaryTailScript = summaryFile.replace('.txt', '-tail.js');
     if (await getNsDataThroughFile(ns, `ns.scriptRunning('${summaryTailScript}', ns.getHostname())`, `${STOCK_SUMMARY_PATH}-is-running.txt`))

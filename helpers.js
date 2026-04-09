@@ -1147,9 +1147,10 @@ export function safeParseJSON(content) {
  * @param {NS} ns The Netscript instance
  * @param {string} path Target file path
  * @param {object} data Data to write
+ * @param {boolean} [silent=false] If true, suppress error logging (for non-critical writes)
  * @returns {Promise<boolean>} Success status
  */
-export async function safelyWriteData(ns, path, data) {
+export async function safelyWriteData(ns, path, data, silent = false) {
     try {
         // Validate input data
         if (!data || typeof data !== 'object') {
@@ -1173,13 +1174,11 @@ export async function safelyWriteData(ns, path, data) {
             ns.rm(path);
         }
         
-        // Atomic write: overwrite directly is safer than rm+rename in Bitburner
-        // ns.write() is atomic for existing files in the game engine
-        const success = await ns.write(path, serialized, 'w');
-        
-        if (!success) {
-            throw new Error('Failed to write file');
-        }
+        // Atomic write: Bitburner's file system can occasionally fail, retry immediately
+        const success = await ns.write(path, serialized, 'w') || 
+                        await ns.write(path, serialized, 'w') || 
+                        await ns.write(path, serialized, 'w');
+        if (!success) throw new Error('Failed to write file');
         
         // Verify the write was successful
         const verification = ns.read(path);
@@ -1189,7 +1188,9 @@ export async function safelyWriteData(ns, path, data) {
         
         return true;
     } catch (error) {
-        log(ns, `ERROR: safelyWriteData failed for ${path}: ${error.message || error}`, false, 'error');
+        if (!silent) {
+            log(ns, `ERROR: safelyWriteData failed for ${path}: ${error.message || error}`, false, 'error');
+        }
         return false;
     }
 }
