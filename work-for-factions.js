@@ -249,6 +249,9 @@ async function loadStartupData(ns) {
     completedFactions = filterableFactions.filter(fac => mostExpensiveAugByFaction[fac] == -1);
     softCompletedFactions = filterableFactions.filter(fac => mostExpensiveDesiredAugByFaction[fac] == -1 && !completedFactions.includes(fac));
     skipFactions = options.skip.concat(cannotWorkForFactions).concat(completedFactions).filter(fac => !firstFactions.includes(fac));
+    // If we're in a gang, we cannot work for other gang factions (only our own)
+    if (playerGang)
+        skipFactions = skipFactions.concat(allGangFactions.filter(f => f !== playerGang));
     if (completedFactions.length > 0)
         ns.print(`${completedFactions.length} factions will be skipped (for having all augs purchased): ${completedFactions.join(", ")}`);
     if (softCompletedFactions.length > 0)
@@ -885,8 +888,13 @@ export async function workForSingleFaction(ns, factionName, forceUnlockDonations
         if ((Date.now() - lastStatusUpdateTime) > statusUpdateInterval)
             workAssigned = false; // This will force us to redetermine the best faction work.
         // Heads up! Current implementation of "detectBestFactionWork" changes the work currently being done, so we must always re-assign work afterwards
-        if (!workAssigned)
+        if (!workAssigned) {
             bestFactionJob = await detectBestFactionWork(ns, factionName);
+            if (!bestFactionJob) {
+                log(ns, `INFO: Cannot work for faction "${factionName}" - insufficient stats for any work type`, false, 'warning');
+                return false;
+            }
+        }
         // For purposes of being informative, log a message if the detected "bestFactionJob" is different from what we were previously doing
         if (currentWork.factionName == factionName && factionJob != bestFactionJob) {
             log(ns, `INFO: Detected that "${bestFactionJob}" gives more rep than previous work "${factionJob}". Switching...`);
@@ -898,8 +906,8 @@ export async function workForSingleFaction(ns, factionName, forceUnlockDonations
                 workAssigned = true;
                 if (shouldFocus && !options['no-tail-windows']) tail(ns); // Keep a tail window open if we're stealing focus
             } else {
-                log(ns, `ERROR: Something went wrong, failed to start "${bestFactionJob}" work for faction "${factionName}" (Is gang faction, or not joined?)`, false, 'error');
-                break;
+                log(ns, `ERROR: Failed to start "${bestFactionJob}" work for faction "${factionName}" (insufficient stats, is gang faction, or not joined)`, false, 'error');
+                return false;
             }
         }
 
@@ -1005,18 +1013,19 @@ async function workForAllMegacorps(ns, factionNames, workForFaction = false) {
     }
 }
 
-/** Detect the best faction work type by measuring rep gain rates
+/** Detect which faction work type gives the best rep gain rate for the player
  * @param {NS} ns
  * @param {string} factionName The faction to test work types for
- * @returns {Promise<string>} The best faction work type (e.g., 'hacking', 'field', 'security') */
+ * @returns {Promise<string|null>} The best faction work type (e.g. 'hacking', 'field', 'security'), or null if none can be started */
 async function detectBestFactionWork(ns, factionName) {
     const workTypes = ['hacking', 'field', 'security'];
-    let bestWork = 'hacking';
+    let bestWork = null;
     let bestRate = 0;
     for (const work of workTypes) {
         if (breakToMainLoop()) break;
-        // Try this work type briefly
-        await startWorkForFaction(ns, factionName, work, false);
+        // Try this work type briefly - check if it actually succeeded
+        const workStarted = await startWorkForFaction(ns, factionName, work, false);
+        if (!workStarted) continue; // Skip this work type if we don't have the stats for it
         await ns.sleep(1000); // Brief sample period
         const rate = await measureFactionRepGainRate(ns, factionName);
         if (rate > bestRate) {
