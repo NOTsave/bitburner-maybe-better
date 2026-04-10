@@ -7,7 +7,7 @@ const PROTECT_FILE = '/Temp/corp-protection.txt';
 // Module configuration with intelligent self-termination
 const MODULES = {
     hr: { 
-        file: 'corp-hr.js', 
+        file: 'Corp/corp-hr.js', 
         ram: 2.5, 
         priority: 1, 
         alwaysOn: true,
@@ -19,7 +19,7 @@ const MODULES = {
         ]
     },
     research: { 
-        file: 'corp-research.js', 
+        file: 'Corp/corp-research.js', 
         ram: 3.0, 
         priority: 1, 
         alwaysOn: true,
@@ -31,7 +31,7 @@ const MODULES = {
         ]
     },
     products: { 
-        file: 'corp-products.js', 
+        file: 'Corp/corp-products.js', 
         ram: 4.0, 
         priority: 2, 
         phase: 3,
@@ -44,7 +44,7 @@ const MODULES = {
         ]
     },
     stocks: { 
-        file: 'corp-stocks.js', 
+        file: 'Corp/corp-stocks.js', 
         ram: 2.0, 
         priority: 3, 
         phase: 5,
@@ -56,7 +56,7 @@ const MODULES = {
         ]
     },
     logistics: { 
-        file: 'corp-logistics.js',  // Fix #2: Corrected filename typo
+        file: 'Corp/corp-logistics.js',  // Moved to Corp/ subdirectory
         ram: 2.5, 
         priority: 2, 
         phase: 2,
@@ -122,11 +122,11 @@ export async function main(ns) {
     }
     
     // --- AUTOSTART WATCHDOG ---
-    if (!ns.isRunning('corp-watchdog.js', 'home')) {
+    if (!ns.isRunning('Corp/corp-watchdog.js', 'home')) {
         log(ns, "INFO: Starting Watchdog (protection)...", true, 'success');
-        const watchdogPid = await ns.run('corp-watchdog.js', 1);
+        const watchdogPid = await ns.run('Corp/corp-watchdog.js', 1);
         if (watchdogPid === 0) {
-            log(ns, "⚠️ ERROR: Failed to start corp-watchdog.js! Check RAM.", true, 'error');
+            log(ns, "⚠️ ERROR: Failed to start Corp/corp-watchdog.js! Check RAM.", true, 'error');
         } else {
             log(ns, "SUCCESS: Watchdog started successfully", true, 'success');
         }
@@ -174,7 +174,7 @@ export async function main(ns) {
             // Emergency mode - start only basic modules with dynamic RAM calculation
             const currentAvailableRAM = await getAvailableRam(ns);
             log(ns, `INFO: Emergency mode - Available RAM: ${currentAvailableRAM.toFixed(1)}GB`, false, 'info');
-            const emergencyModules = ['corp-products.js', 'corp-research.js'];
+            const emergencyModules = ['Corp/corp-products.js', 'Corp/corp-research.js'];
             for (const modName of emergencyModules) {
                 if (ns.isRunning(modName, 'home')) continue;
                 const config = Object.values(MODULES).find(m => m.file === modName);
@@ -211,7 +211,7 @@ export async function main(ns) {
                 modules: getRunningModules(ns),
                 ramUsage: calculateRamUsage(ns),
                 timestamp: Date.now(),
-                watchdogRunning: ns.isRunning('corp-watchdog.js', 'home'),
+                watchdogRunning: ns.isRunning('Corp/corp-watchdog.js', 'home'),
                 fetcherRunning: ns.isRunning('corp-fetcher.js', 'home')
             };
             await ns.write(PROTECT_FILE, JSON.stringify(heartbeat), 'w');
@@ -222,6 +222,10 @@ export async function main(ns) {
                 state = await maybeAdvancePhase(ns, state);
                 state.lastPhaseCheck = Date.now();
             }
+            
+            // --- CORE DIVISION CREATION (Agriculture -> Tobacco) ---
+            // Automatically creates required divisions if they don't exist
+            await ensureCoreDivisions(ns, corp);
             
             // --- DUMMY DIVISION CREATION (Investment Round Boost) ---
             // Creates cheap Restaurant divisions to boost valuation before investment rounds
@@ -409,6 +413,30 @@ async function terminateModule(ns, filename, moduleName) {
     }
 }
 
+// Core division configuration - auto-created in early phases
+const CORE_DIVISIONS = {
+    Agriculture: {
+        name: 'GreenGrow',
+        priority: 1,  // Create first
+        minPhase: 0,
+        costEstimate: 150e9  // ~50b to create + ~100b for expansions
+    },
+    Chemical: {
+        name: 'ChemSynth',
+        priority: 2,  // Create second - vertical integration with Agriculture
+        minPhase: 1,
+        costEstimate: 200e9  // ~70b to create + ~130b for expansions
+    },
+    Tobacco: {
+        name: 'SmokeWorks',
+        priority: 3,  // Create third - needs more funds, high-value products
+        minPhase: 2,
+        costEstimate: 300e9  // ~150b to create + ~150b for expansions
+    }
+};
+
+const CITIES = ['Sector-12', 'Aevum', 'Chongqing', 'New Tokyo', 'Ishima', 'Volhaven'];
+
 // RP thresholds per corp strategy guide
 const RP_THRESHOLDS = {
     1: { Agriculture: 55, Chemical: 0 },        // Round 1: Agri 55 RP before production
@@ -442,6 +470,88 @@ async function checkRPThresholds(ns, corp, targetPhase) {
     }
     
     return true;
+}
+
+/** Ensure core divisions (Agriculture, Tobacco) exist
+ * Auto-creates them in order when funds are available
+ * @param {NS} ns
+ * @param {Object} corp - Corporation data
+ */
+async function ensureCoreDivisions(ns, corp) {
+    if (!corp || !corp.divisions) return;
+    
+    const funds = corp.funds || 0;
+    const existingTypes = corp.divisions.map(d => d.type);
+    
+    // Sort by priority and process each core division
+    const sortedDivisions = Object.entries(CORE_DIVISIONS)
+        .sort((a, b) => a[1].priority - b[1].priority);
+    
+    for (const [industry, config] of sortedDivisions) {
+        // Skip if already exists
+        if (existingTypes.includes(industry)) continue;
+        
+        // Check if we have enough funds
+        if (funds < config.costEstimate) {
+            log(ns, `INFO: Waiting for funds to create ${industry} division (need ~${formatMoney(config.costEstimate)}, have ${formatMoney(funds)})`, false, 'info');
+            return; // Don't check lower priority divisions until higher ones are created
+        }
+        
+        try {
+            // Create the division
+            log(ns, `SUCCESS: Creating ${industry} division "${config.name}"...`, true, 'success');
+            const success = await getNsDataThroughFile(ns, 
+                'ns.corporation.expandIndustry(ns.args[0], ns.args[1])', 
+                null, 
+                [industry, config.name]
+            );
+            
+            if (!success) {
+                log(ns, `WARNING: Failed to create ${industry} division - may already exist or insufficient funds`, false, 'warning');
+                continue;
+            }
+            
+            log(ns, `SUCCESS: ${industry} division "${config.name}" created!`, true, 'success');
+            await asleep(ns, 2000);
+            
+            // Expand to all cities
+            for (const city of CITIES) {
+                if (city === 'Sector-12') continue; // Already exists
+                
+                try {
+                    await getNsDataThroughFile(ns, 
+                        'ns.corporation.expandCity(ns.args[0], ns.args[1])', 
+                        null, 
+                        [config.name, city]
+                    );
+                    
+                    // Purchase warehouse for this city
+                    await getNsDataThroughFile(ns, 
+                        'ns.corporation.purchaseWarehouse(ns.args[0], ns.args[1])', 
+                        null, 
+                        [config.name, city]
+                    );
+                    
+                    // Enable smart supply
+                    await getNsDataThroughFile(ns, 
+                        'ns.corporation.setSmartSupply(ns.args[0], ns.args[1], true)', 
+                        null, 
+                        [config.name, city]
+                    );
+                    
+                    log(ns, `SUCCESS: ${config.name} expanded to ${city} with warehouse`, false, 'success');
+                    await asleep(ns, 1000);
+                } catch (e) {
+                    log(ns, `WARN: Failed to expand ${config.name} to ${city}: ${e.message || e}`, false, 'warning');
+                }
+            }
+            
+            log(ns, `SUCCESS: ${industry} division "${config.name}" fully set up in all cities!`, true, 'success');
+            
+        } catch (e) {
+            log(ns, `ERROR: Failed to create ${industry} division: ${e.message || e}`, false, 'error');
+        }
+    }
 }
 
 /** Advance to next phase if RP thresholds are met

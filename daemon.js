@@ -250,6 +250,15 @@ export async function main(ns) {
      * @returns {number} */
     function reservedMoney(ns) {
         let shouldReserve = Number(ns.read("reserve.txt") || 0);
+        // Corp coordination: Check if corp needs cash (time-bounded)
+        if (ns.fileExists("corp-reserve.txt")) {
+            try {
+                const corpReserve = JSON.parse(ns.read("corp-reserve.txt"));
+                if (corpReserve?.until > Date.now()) {
+                    shouldReserve += Number(corpReserve.amount) || 0;
+                }
+            } catch { /* Invalid JSON, ignore */ }
+        }
         let playerMoney = getPlayerMoney(ns);
         // Conserve money if we get close to affording the last hack tool
         if (!ownedCracks.includes("SQLInject.exe") && playerMoney > 200e6)
@@ -319,7 +328,7 @@ export async function main(ns) {
         if (lastBitnode !== String(bitNodeN)) {
             log(ns, `INFO: Bitnode change detected (${lastBitnode || 'none'} -> ${bitNodeN}). Clearing stale temp files...`);
             // Use runCommand to avoid adding ns.fileExists/ns.rm to daemon's static RAM cost
-            await runCommand(ns, `['/Temp/scanAllServers.txt','/Temp/getServerMaxRam-all.txt','/Temp/getServerRequiredHackingLevel-all.txt','/Temp/getServerNumPortsRequired-all.txt','/Temp/getServerGrowth-all.txt','/Temp/getServer.txt','/Temp/getServerMinSecurityLevel-all.txt','/Temp/getServerMaxMoney-all.txt'].forEach(f=>{try{ns.rm(f)}catch{}}); ns.write('${bitnodeMarkerFile}','${bitNodeN}','w')`, '/Temp/clear-stale-files.js');
+            await runCommand(ns, `['/Temp/scanAllServers.txt','/Temp/getServerMaxRam-all.txt','/Temp/getServerRequiredHackingLevel-all.txt','/Temp/getServerNumPortsRequired-all.txt','/Temp/getServerGrowth-all.txt','/Temp/getServer.txt','/Temp/getServerMinSecurityLevel-all.txt','/Temp/getServerMaxMoney-all.txt','/Temp/autopilot-casino-done.txt'].forEach(f=>{try{ns.rm(f)}catch{}}); ns.write('${bitnodeMarkerFile}','${bitNodeN}','w')`, '/Temp/clear-stale-files.js');
         }
         dictSourceFiles = await getActiveSourceFiles_Custom(ns, getNsDataThroughFile);
         log(ns, "The following source files are active: " + JSON.stringify(dictSourceFiles));
@@ -405,7 +414,7 @@ export async function main(ns) {
             { name: "spend-hacknet-hashes.js", shouldRun: () => reqRam(64) && 9 in dictSourceFiles, args: [], shouldTail: false }, // Always have this running to make sure hashes aren't wasted
             { name: "sleeve.js", shouldRun: () => reqRam(64) && 10 in dictSourceFiles }, // Script to create manage our sleeves for us
             { name: "gangs.js", shouldRun: () => reqRam(64) && 2 in dictSourceFiles }, // Script to create manage our gang for us
-            { name: "corp-fetcher.js", shouldRun: () => (bitNodeN === 3 || 3 in dictSourceFiles) && bitNodeN !== 8, args: [], shouldTail: false }, // Corp API requires BN3 or SF3. Disabled in BN8
+            { name: "corp-fetcher.js", shouldRun: () => (bitNodeN === 3 || 3 in dictSourceFiles) && bitNodeN !== 8, args: [], shouldTail: false }, // Corp API requires BN3 or SF3. Disabled in BN8. Script exits cleanly if no corp exists
             {
                 name: "work-for-factions.js", args: ['--fast-crimes-only', '--no-coding-contracts'],  // Singularity script to manage how we use our "focus" work.
                 shouldRun: () => 4 in dictSourceFiles && reqRam(256 / (2 ** dictSourceFiles[4]) && !studying) // Higher SF4 levels result in lower RAM requirements
@@ -458,6 +467,8 @@ export async function main(ns) {
             },
             // Check if any new servers can be backdoored. If there are many, this can eat up a lot of RAM, so make this the last script scheduled at startup.
             { interval: 33000, name: "/Tasks/backdoor-all-servers.js", shouldRun: () => 4 in dictSourceFiles && playerHackSkill() > 10 }, // Don't do this until we reach hack level 10. If we backdoor too early, it's very slow and eats up RAM for a long time,
+            // Auto-buy corporation when we have enough money ($150b to self-fund). Corp API requires BN3 or SF3. Disabled in BN8.
+            { interval: 60000, name: "/Tasks/corp-auto-buy.js", shouldRun: () => (bitNodeN === 3 || 3 in dictSourceFiles) && bitNodeN !== 8 && getPlayerMoney(ns) > 150e9 },
         ];
         periodicScripts.forEach(tool => tool.ignoreReservedRam = true);
         if (verbose) // In verbose mode, have periodic sripts persist their logs.

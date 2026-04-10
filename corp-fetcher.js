@@ -3,12 +3,24 @@ import { getNsDataThroughFile, log, safelyWriteData, DEFAULT_CORP_DATA_PATH, asl
 /** @param {NS} ns **/
 export async function main(ns) {
     const DATA_PATH = DEFAULT_CORP_DATA_PATH;
-    
+
+    // Check if corporation API is available and corporation exists before entering main loop
+    const hasCorp = await getNsDataThroughFile(ns, 'ns.corporation.hasCorporation()');
+    if (!hasCorp) {
+        log(ns, 'INFO: No corporation owned yet. corp-fetcher.js exiting.', false, 'info');
+        return;
+    }
+
     while (true) {
         try {
+            // Double-check corporation still exists (in case it was sold/liquidated)
+            if (!await getNsDataThroughFile(ns, 'ns.corporation.hasCorporation()')) {
+                log(ns, 'INFO: Corporation no longer exists. corp-fetcher.js exiting.', false, 'info');
+                return;
+            }
             const corp = await getNsDataThroughFile(ns, 'ns.corporation.getCorporation()');
             if (!corp || !corp.divisions || !Array.isArray(corp.divisions)) {
-                await ns.sleep(5000);
+                await asleep(ns, 5000);
                 continue;
             }
             const divisionsData = [];
@@ -65,6 +77,17 @@ export async function main(ns) {
             // Single top-level catch handles all errors (fetch, division processing, write)
             log(ns, `ERROR: Corp-fetcher failed: ${e.message || e}`, false, 'error');
         }
-        await asleep(ns, 2000);
+
+        // Sync to corp tick for efficient updates (fallback to 2s sleep on error)
+        try {
+            // Pre-check: if corp was sold while we were processing, exit cleanly
+            if (!await getNsDataThroughFile(ns, 'ns.corporation.hasCorporation()')) {
+                log(ns, 'INFO: Corporation sold during processing. corp-fetcher.js exiting.', false, 'info');
+                return;
+            }
+            await ns.corporation.nextUpdate();
+        } catch {
+            await asleep(ns, 2000);
+        }
     }
 }

@@ -3,10 +3,10 @@ import {
     runCommand, getNsDataThroughFile, formatMoney, getErrorInfo, tail
 } from './helpers.js'
 
-const CASINO_DONE_FILE = "/Temp/autopilot-casino-done.txt"; // Must match autopilot.js
+const CASINO_DONE_FILE = "/Flags/autopilot-casino-done.txt"; // Persisted flag, outside /Temp/ to avoid cleanup
 
 const argsSchema = [
-    ['save-sleep-time', 1000], // Time to sleep in milliseconds before and after saving. If you are having trouble with your automatic saves not "taking effect" try increasing this.
+    ['save-sleep-time', 100], // Time to sleep in milliseconds before and after saving. If you are having trouble with your automatic saves not "taking effect" try increasing this.
     ['click-sleep-time', 5], // Time to sleep in milliseconds before and after clicking any button (or setting text). Increase if clicks don't appear to be "taking effect".
     ['find-sleep-time', 0], // Time to sleep in milliseconds before (but not after) trying to find any element on screen. Increase if you are frequently getting errors detecting elements that should be on screen.
     ['use-basic-strategy', false], // Set to true to use the basic strategy (Stay on 17+)

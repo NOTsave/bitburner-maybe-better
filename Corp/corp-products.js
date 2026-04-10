@@ -1,4 +1,4 @@
-import { getNsDataThroughFile, log, formatMoney, getCachedCorpData, asleep } from './helpers.js'
+import { getNsDataThroughFile, log, formatMoney, getCachedCorpData, asleep } from '../helpers.js'
 
 // Product Module Configuration
 const PRODUCT_CONFIG = {

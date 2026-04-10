@@ -1,7 +1,7 @@
 import { log, getConfiguration, instanceCount, getNsDataThroughFile, runCommand, waitForProcessToComplete,
     getActiveSourceFiles, tryGetBitNodeMultipliers, getStocksValue, unEscapeArrayArgs,
     formatMoney, formatDuration, formatNumber, getErrorInfo, tail, jsonReplacer, getFilePath, DEFAULT_CORP_DATA_PATH, getCachedCorpData } from './helpers.js'
-import { maximizeDividends } from './corp-dividend-manager.js'
+import { maximizeDividends } from './Corp/corp-dividend-manager.js'
 
 // Cache frequently used format functions to reduce property access
 const fmtMoney = formatMoney;
@@ -48,7 +48,7 @@ export function autocomplete(data, args) {
 export async function main(ns) {
     const persistentLog = "log.autopilot.txt";
     const factionManagerOutputFile = "/Temp/affordable-augs.txt"; // Temp file produced by faction manager with status information
-    const casinoDoneFile = "/Temp/autopilot-casino-done.txt"; // File to persist casino completion state across restarts
+    const casinoDoneFile = "/Flags/autopilot-casino-done.txt"; // File to persist casino completion state across restarts
     const defaultBnOrder = [ // The order in which we intend to play bitnodes
         // 1st Priority: Key new features and/or major stat boosts
         4.3,  // Normal. Need singularity to automate everything, and need the API costs reduced from 16x -> 4x -> 1x reliably do so from the start of each BN

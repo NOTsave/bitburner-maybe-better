@@ -1,4 +1,4 @@
-import { getNsDataThroughFile, log, formatMoney, getCachedCorpData, asleep } from './helpers.js'
+import { getNsDataThroughFile, log, formatMoney, getCachedCorpData, asleep } from '../helpers.js'
 
 // Priority research for maximum efficiency
 // CORRECTED per corp strategy guide: Costs are in RP (research points), not dollars

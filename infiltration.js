@@ -250,15 +250,25 @@ export async function main(ns) {
             // Navigate to location
             await navigateToLocation(target.location);
 
-            // Start infiltration
-            const startBtn = await tryfindElement("//button[contains(text(), 'Infiltrate')]");
+            // Start infiltration - try multiple selectors
+            let startBtn = await tryfindElement("//button[contains(text(), 'Infiltrate')]", 3);
+            if (!startBtn) startBtn = await tryfindElement("//button[contains(text(), 'INFILTRATE')]", 3);
+            if (!startBtn) startBtn = await tryfindElement("//*[contains(text(), 'Infiltrate')]", 3);
+            if (!startBtn) startBtn = await tryfindElement("//div[@role='button' and contains(., 'Infiltrate')]", 3);
+            if (!startBtn) startBtn = await tryfindElement("//button[@aria-label and contains(@aria-label, 'Infiltrate')]", 3);
+            if (!startBtn) startBtn = await tryfindElement("//span[contains(text(), 'Infiltrate')]/parent::button", 3);
+            if (!startBtn) startBtn = await tryfindElement("//span[contains(text(), 'Infiltrate')]/ancestor::button", 3);
+
             if (!startBtn) {
-                log(ns, `WARNING: No infiltration button found at ${target.location}`);
+                log(ns, `WARNING: No infiltration button found at ${target.location}. Check if button text is different.`, true, 'warning');
                 return false;
             }
 
+            if (verbose) log(ns, `Found infiltration button: ${startBtn.tagName} ${startBtn.textContent?.substring(0, 30) || ''}`);
+
+            await sleep(jitter(400, 25)); // Human reaction time before clicking
             await click(startBtn);
-            await sleep(500);
+            await sleep(jitter(600, 20));
 
             // Handle infiltration mini-games
             let gameCount = 0;
@@ -328,18 +338,35 @@ export async function main(ns) {
 
         // Fall back to DOM navigation
         const travelBtn = await findRequiredElement("//div[@role='button' and contains(., 'Travel')]");
+        await sleep(jitter(200, 20));
         await click(travelBtn);
-        await sleep(200);
+        await sleep(jitter(350, 20));
 
-        const cityBtn = await findRequiredElement(`//span[contains(@class,'travel') and contains(text(), '${city[0]}')]`);
+        // Try multiple strategies to find the city button (matching casino.js pattern)
+        let cityBtn = await tryfindElement(`//span[@aria-label = '${city}']`, 3);
+        if (!cityBtn) cityBtn = await tryfindElement(`//button[@aria-label = '${city}']`, 3);
+        if (!cityBtn) cityBtn = await tryfindElement(`//*[@aria-label = '${city}']`, 3);
+        if (!cityBtn) cityBtn = await tryfindElement(`//span[contains(@class,'travel') and contains(text(), '${city[0]}')]`, 3);
+        if (!cityBtn) cityBtn = await tryfindElement(`//span[contains(@class,'travel') and text()='${city[0]}']`, 3);
+        if (!cityBtn) cityBtn = await tryfindElement(`//span[contains(text(), '${city}')]`, 3);
+        if (!cityBtn) cityBtn = await tryfindElement(`//button[contains(text(), '${city}')]`, 3);
+
+        if (!cityBtn) {
+            throw new Error(`Could not find city button for '${city}'. Tried aria-label, travel class, and text content selectors.`);
+        }
+
+        await sleep(jitter(150, 25));
         await click(cityBtn);
-        await sleep(200);
+        await sleep(jitter(350, 20));
 
         // Confirm travel if dialog appears
         const confirmBtn = await tryfindElement("//button[p/text()='Travel']");
-        if (confirmBtn) await click(confirmBtn);
+        if (confirmBtn) {
+            await sleep(jitter(200, 20));
+            await click(confirmBtn);
+        }
 
-        await sleep(500);
+        await sleep(jitter(550, 15));
     }
 
     /** Navigate to company location */
@@ -348,13 +375,26 @@ export async function main(ns) {
 
         // Try to use World -> City menu
         const cityMenu = await findRequiredElement("//div[@role='button' and contains(., 'City')]");
+        await sleep(jitter(200, 20));
         await click(cityMenu);
-        await sleep(200);
+        await sleep(jitter(350, 20));
 
-        // Find location in the list
-        const locBtn = await findRequiredElement(`//span[contains(text(), '${location}')]`);
+        // Find location in the list - try multiple XPath strategies since UI may vary
+        let locBtn = await tryfindElement(`//span[@aria-label = '${location}']`, 3);
+        if (!locBtn) locBtn = await tryfindElement(`//button[@aria-label = '${location}']`, 3);
+        if (!locBtn) locBtn = await tryfindElement(`//*[@aria-label = '${location}']`, 3);
+        if (!locBtn) locBtn = await tryfindElement(`//span[contains(text(), '${location}')]`, 3);
+        if (!locBtn) locBtn = await tryfindElement(`//button[contains(text(), '${location}')]`, 3);
+        if (!locBtn) locBtn = await tryfindElement(`//div[contains(text(), '${location}')]`, 3);
+        if (!locBtn) locBtn = await tryfindElement(`//*[contains(text(), '${location}')]`, 3);
+
+        if (!locBtn) {
+            throw new Error(`Could not find location button for '${location}'. Tried aria-label and text content selectors.`);
+        }
+
+        await sleep(jitter(150, 25));
         await click(locBtn);
-        await sleep(500);
+        await sleep(jitter(550, 15));
     }
 
     // ==================== Minigame State ====================
@@ -401,9 +441,15 @@ export async function main(ns) {
         };
     }
 
+    /** Add random jitter to timing to avoid detection */
+    function jitter(baseTime, variancePercent = 20) {
+        const variance = baseTime * (variancePercent / 100);
+        return baseTime + (Math.random() * variance * 2 - variance);
+    }
+
     /** Handle various mini-games during infiltration */
     async function handleMiniGame() {
-        const reactionTime = Math.max(50, options['game-reaction-time']);
+        const reactionTime = Math.max(100, jitter(options['game-reaction-time'], 25));
 
         // Check for game completion
         const completeBtn = await tryfindElement("//button[contains(text(), 'Sell') or contains(text(), 'Trade') or contains(text(), 'Finish')]");
@@ -464,13 +510,14 @@ export async function main(ns) {
         // Check for continue/next button
         const nextBtn = await tryfindElement("//button[contains(text(), 'Continue') or contains(text(), 'Next')]");
         if (nextBtn) {
+            await sleep(jitter(150, 25));
             await click(nextBtn);
-            await sleep(200);
+            await sleep(jitter(200, 20));
             return 'next';
         }
 
         // No recognized game state, wait briefly
-        await sleep(100);
+        await sleep(jitter(100, 30));
         return 'unknown';
     }
 
@@ -478,10 +525,10 @@ export async function main(ns) {
     async function handleSlashGame(reactionTime) {
         // From source: Guarding phase random 1500-4750ms, then distracted window 250-800ms
         // MightOfAres aug gives longer window
-        const minGuardTime = 1500;
+        const minGuardTime = 1500 + Math.random() * 500; // Add some randomness to guard time
         const distractedWindow = 600; // Conservative estimate
 
-        await sleep(minGuardTime + reactionTime);
+        await sleep(jitter(minGuardTime + reactionTime, 15));
 
         // Send SPACE key
         const slashBtn = await tryfindElement("//button[contains(text(), 'Slash')]");
@@ -491,7 +538,7 @@ export async function main(ns) {
             await simulateKeyPress(' ');
         }
 
-        await sleep(200);
+        await sleep(jitter(200, 30));
         return 'slash';
     }
 
@@ -514,11 +561,11 @@ export async function main(ns) {
 
         for (const char of answer) {
             await simulateKeyPress(char);
-            await sleep(50);
+            await sleep(jitter(80, 40)); // Human typing speed varies
         }
 
         gameState.bracketLeft = '';
-        await sleep(200);
+        await sleep(jitter(300, 25));
         return 'bracket';
     }
 
@@ -541,13 +588,14 @@ export async function main(ns) {
             const key = arrowKeys[arrow];
             if (key) {
                 await simulateKeyPress(key);
-                await sleep(reactionTime / 2);
+                await sleep(jitter(reactionTime / 2, 35));
             }
             gameState.cheatIndex++;
         }
 
         gameState.cheatCode = [];
         gameState.cheatIndex = 0;
+        await sleep(jitter(250, 20));
         return 'cheat';
     }
 
@@ -578,14 +626,14 @@ export async function main(ns) {
 
             for (let i = 0; i < Math.abs(diff); i++) {
                 await simulateKeyPress(key);
-                await sleep(50);
+                await sleep(jitter(80, 30));
             }
 
-            await sleep(100);
+            await sleep(jitter(150, 25));
             await simulateKeyPress(' ');
         }
 
-        await sleep(200);
+        await sleep(jitter(250, 20));
         return 'bribe';
     }
 
@@ -602,12 +650,12 @@ export async function main(ns) {
             const reversed = gameState.backwardWord.split('').reverse().join('');
             for (const char of reversed) {
                 await simulateKeyPress(char);
-                await sleep(reactionTime / 4);
+                await sleep(jitter(reactionTime / 4, 40));
             }
         }
 
         gameState.backwardWord = '';
-        await sleep(200);
+        await sleep(jitter(300, 25));
         return 'backward';
     }
 
@@ -631,12 +679,13 @@ export async function main(ns) {
             const moves = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
             for (let i = 0; i < 5; i++) {
                 await simulateKeyPress(moves[Math.floor(Math.random() * 4)]);
-                await sleep(reactionTime);
+                await sleep(jitter(reactionTime, 20));
             }
+            await sleep(jitter(100, 30));
             await simulateKeyPress(' ');
         }
 
-        await sleep(200);
+        await sleep(jitter(350, 25));
         return 'cyberpunk';
     }
 
@@ -646,7 +695,7 @@ export async function main(ns) {
 
         if (memoryIndicator) {
             gameState.minesweeperPhase = 'memory';
-            await sleep(2000); // Wait for memory phase to end
+            await sleep(jitter(2000, 10)); // Wait for memory phase to end
             return 'minesweeper-memory';
         }
 
@@ -656,11 +705,12 @@ export async function main(ns) {
         const moves = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
         for (let i = 0; i < 4; i++) {
             await simulateKeyPress(moves[Math.floor(Math.random() * 4)]);
-            await sleep(reactionTime);
+            await sleep(jitter(reactionTime, 25));
+            await sleep(jitter(50, 50));
             await simulateKeyPress(' ');
         }
 
-        await sleep(200);
+        await sleep(jitter(350, 20));
         return 'minesweeper';
     }
 
@@ -706,11 +756,11 @@ export async function main(ns) {
         for (const wireIndex of wiresToCut) {
             if (wireButtons[wireIndex]) {
                 await click(wireButtons[wireIndex]);
-                await sleep(100);
+                await sleep(jitter(150, 35));
             }
         }
 
-        await sleep(200);
+        await sleep(jitter(300, 25));
         return 'wire';
     }
 
@@ -776,9 +826,19 @@ export async function main(ns) {
             throw new Error("click was called on a null reference.");
         const sleepDelay = options['click-sleep-time'];
         if (sleepDelay > 0) await sleep(sleepDelay);
-        const fnOnClick = button[Object.keys(button)[1]].onClick;
+
+        // Search through all properties to find the one with onClick (React fiber can move)
+        let fnOnClick = null;
+        for (const key of Object.keys(button)) {
+            const prop = button[key];
+            if (prop && typeof prop === 'object' && prop.onClick) {
+                fnOnClick = prop.onClick;
+                break;
+            }
+        }
+
         if (!fnOnClick)
-            throw new Error(`Found button but couldn't find its onclick method!`);
+            throw new Error(`Found button but couldn't find its onclick method! Keys: ${Object.keys(button).slice(0, 5).join(', ')}...`);
         if (verbose) log(ns, `Clicking button`);
         await fnOnClick({ isTrusted: true });
         if (sleepDelay > 0) await sleep(sleepDelay);
@@ -790,7 +850,21 @@ export async function main(ns) {
         const sleepDelay = options['click-sleep-time'];
         if (sleepDelay > 0) await sleep(sleepDelay);
         if (verbose) log(ns, `Setting text: ${text}`);
-        await input[Object.keys(input)[1]].onChange({ isTrusted: true, target: { value: text } });
+
+        // Search through all properties to find the one with onChange (React fiber can move)
+        let fnOnChange = null;
+        for (const key of Object.keys(input)) {
+            const prop = input[key];
+            if (prop && typeof prop === 'object' && prop.onChange) {
+                fnOnChange = prop.onChange;
+                break;
+            }
+        }
+
+        if (!fnOnChange)
+            throw new Error(`Found input but couldn't find its onChange method! Keys: ${Object.keys(input).slice(0, 5).join(', ')}...`);
+
+        await fnOnChange({ isTrusted: true, target: { value: text } });
         if (sleepDelay > 0) await sleep(sleepDelay);
     }
 

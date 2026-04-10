@@ -1,5 +1,5 @@
 import { getNsDataThroughFile, log, formatMoney, getCachedCorpData, handleCorpError, safeCorpOperation, getTobaccoDivision, isDivisionValid, asleep } from './helpers.js'
-import { calculateOptimalPartyCost, calculatePerfMult } from './corp-helpers.js'
+import { calculateOptimalPartyCost, calculatePerfMult } from '../corp-helpers.js'
 
 // Fix #6: Global Constant Definitions
 const CORP_CONFIG = {
@@ -17,7 +17,9 @@ const HR_CONFIG = {
     hireThreshold: 1e12,    // Hire at 1T+ funds
     expandThreshold: 5e12,  // Expand at 5T+ funds
     targetOfficeSize: 30,    // Target office size
-    moraleThreshold: 0.7     // Minimum morale for actions
+    moraleThreshold: 0.7,    // Minimum morale for actions
+    adVertThreshold: 50e9,  // Minimum funds before hiring AdVert (50B)
+    adVertFundsRatio: 0.05  // Spend up to 5% of funds on AdVert
 };
 
 const STAFF = {
@@ -63,6 +65,10 @@ export async function main(ns) {
             
             // --- OFFICE EXPANSION ---
             await manageExpansion(ns, corp);
+            
+            // --- ADVERTISING (AdVert) ---
+            // Hire AdVert agency to boost awareness/popularity
+            await manageAdvertising(ns, corp);
             
         } catch (e) {
             // Fix #1, #4: Standardized error handling using helper function
@@ -246,5 +252,47 @@ async function assignRoles(ns, division, city, targetStaff) {
     } catch (e) {
         // Fix Priority 1: Error logging instead of silent catch
         log(ns, `ERROR in ${ns.getScriptName()} assigning roles for ${division}/${city}: ${e.message || e}`, false, 'error');
+    }
+}
+
+/** Manage AdVert advertising for all divisions
+ * AdVert increases awareness and popularity which drives sales
+ * @param {NS} ns
+ * @param {Object} corp - Corporation data
+ */
+async function manageAdvertising(ns, corp) {
+    if (!corp.divisions || !Array.isArray(corp.divisions)) return;
+    if (corp.funds < HR_CONFIG.adVertThreshold) return;
+    
+    // Calculate budget - up to 5% of current funds
+    const maxAdSpend = corp.funds * HR_CONFIG.adVertFundsRatio;
+    let totalSpent = 0;
+    
+    for (const div of corp.divisions) {
+        if (!div?.name) continue;
+        
+        try {
+            // Check current AdVert count
+            const adVertCount = await cc(ns, 'ns.corporation.getHireAdVertCount(ns.args[0])', [div.name]);
+            
+            // Get cost for next AdVert hire
+            const adVertCost = await cc(ns, 'ns.corporation.getHireAdVertCost(ns.args[0])', [div.name]);
+            
+            // Hire AdVert if affordable within budget and we haven't hit diminishing returns too hard
+            // Cap at reasonable number to avoid wasting money
+            if (adVertCost < maxAdSpend - totalSpent && adVertCount < 10) {
+                await cc(ns, 'ns.corporation.hireAdVert(ns.args[0])', [div.name]);
+                totalSpent += adVertCost;
+                log(ns, `SUCCESS: Hired AdVert for ${div.name} (${formatMoney(adVertCost)}) - Count: ${adVertCount + 1}`, false, 'success');
+                await asleep(ns, 1000);
+            }
+        } catch (e) {
+            // AdVert may fail if already at max or division doesn't support it
+            if (e.message?.includes('not supported')) {
+                // Some industries don't support AdVert, skip silently
+                continue;
+            }
+            log(ns, `WARN: Failed to hire AdVert for ${div.name}: ${e.message || e}`, false, 'warning');
+        }
     }
 }

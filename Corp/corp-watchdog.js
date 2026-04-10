@@ -1,6 +1,6 @@
 import {
     log, getNsDataThroughFile, getErrorInfo, getFilePath, asleep
-} from './helpers.js'
+} from '../helpers.js'
 
 // RAM-dodging wrapper functions
 async function cc(ns, command, args = []) {

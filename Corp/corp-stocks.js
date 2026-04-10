@@ -1,5 +1,5 @@
 import { getNsDataThroughFile, log, formatMoney, formatNumber, formatRam, getFilePath, 
-    getFnRunViaNsExec, getFnIsAliveViaNsIsRunning, runCommand, getNsDataThroughFile_Custom, getCachedCorpData, asleep } from './helpers.js'
+    getFnRunViaNsExec, getFnIsAliveViaNsIsRunning, runCommand, getNsDataThroughFile_Custom, getCachedCorpData, asleep } from '../helpers.js'
 import { setOperatingDividends } from './corp-dividend-manager.js'
 
 // Stock module configuration

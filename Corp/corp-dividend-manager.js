@@ -1,4 +1,4 @@
-import { getNsDataThroughFile, runCommand, log, TIMEOUT } from './helpers.js'
+import { getNsDataThroughFile, runCommand, log, TIMEOUT } from '../helpers.js'
 
 /**
  * Standardized dividend management for corporation
