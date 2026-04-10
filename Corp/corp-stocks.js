@@ -96,13 +96,14 @@ async function evaluateStockCondition(ns, corp, condition) {
                 };
                 
             case 'profit_margin':
-                // Simplified profit margin calculation with zero protection
-                const profitPerShare = corp.sharePrice - (corp.issuedShares > 0 ? corp.shareSalePrice : 0);
-                const margin = corp.sharePrice > 0 ? profitPerShare / corp.sharePrice : 0;
-                
+                // API LIMITATION: CorporationInfo has no cost basis property (shareSalePrice does not exist).
+                // Only sharePrice (current price), numShares (shares owned), and issuedShares are available.
+                // Without purchase price history, profit margin cannot be calculated.
+                // Alternative: Use 'shares_owned' or 'total_value' conditions for similar behavior.
+                // See: https://raw.githubusercontent.com/bitburner-official/bitburner-src/dev/markdown/bitburner.corporationinfo.md
                 return {
-                    shouldTerminate: margin >= condition.value,
-                    reason: `Profit margin high enough (${(margin*100).toFixed(1)}% >= ${(condition.value*100).toFixed(1)}%)`
+                    shouldTerminate: false,
+                    reason: 'profit_margin disabled - API lacks cost basis data (CorporationInfo has sharePrice but no shareSalePrice/purchase history)'
                 };
                 
             case 'total_value':
@@ -135,19 +136,21 @@ async function manageStocks(ns, corp) {
             );
             
             if (toBuy > 0) {
-                await cc(ns, 'ns.corporation.buyBackShares(ns.args[0], ns.args[1])', [toBuy]);
+                await cc(ns, 'ns.corporation.buyBackShares(ns.args[0])', [toBuy]);
                 log(ns, `SUCCESS: Bought ${toBuy} shares (${formatMoney(toBuy * corp.sharePrice)})`, false, 'success');
             }
         }
         
-        // Sell shares (if we have profit)
-        const profitPerShare = corp.sharePrice - (corp.issuedShares > 0 ? corp.shareSalePrice : 0);
-        if (profitPerShare > 0 && currentHolding > maxStock * 0.8) {
+        // Sell shares when holding is high (rebalancing)
+        // NOTE: API doesn't track cost basis (shareSalePrice), so profit-based selling is not possible.
+        // This logic sells 20% of holdings when above 80% of max to free up capital.
+        // May sell at a loss - monitor manually if share price drops significantly.
+        if (currentHolding > maxStock * 0.8) {
             const toSell = Math.floor(currentHolding * 0.2); // Sell 20%
             
-            if (toSell > 0 && profitPerShare > corp.sharePrice * STOCK_CONFIG.minProfitMargin) {
+            if (toSell > 0) {
                 await cc(ns, 'ns.corporation.sellShares(ns.args[0])', [toSell]);
-                log(ns, `SUCCESS: Sold ${toSell} shares. Profit: ${formatMoney(profitPerShare * toSell)}`, false, 'success');
+                log(ns, `SUCCESS: Sold ${toSell} shares. Value: ${formatMoney(corp.sharePrice * toSell)}`, false, 'success');
             }
         }
         
@@ -170,8 +173,8 @@ async function manageDividends(ns, corp) {
             log(ns, `INFO: Setting dividend rate to ${targetDividendPercent.toFixed(0)}% (from ${currentDividendPercent.toFixed(0)}%)`, false, 'info');
         }
         
-        // Note: Dividends are paid automatically based on the percentage set.
-        // No need to call issueDividends - that function doesn't exist in the API.
+        // Note: Dividends are set via issueDividends(rate) where rate is 0.0-1.0
+        // This is handled by the corp-dividend-manager module
         
     } catch (e) {
         log(ns, `ERROR in ${ns.getScriptName()} managing dividends: ${e.message || e}`, false, 'error');

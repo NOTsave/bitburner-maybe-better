@@ -39,7 +39,7 @@ export async function setDividendPercentage(ns, targetPercent, reason = 'Unknown
             }
 
             // Set the dividend percentage
-            await runCommand(ns, `ns.corporation.setDividendPercent(ns.args[0])`, '/Temp/dividend-adjust.js', [targetPercent]);
+            await runCommand(ns, `ns.corporation.issueDividends(ns.args[0] / 100)`, '/Temp/dividend-adjust.js', [targetPercent]);
             
             // Verify the change took effect
             await ns.sleep(DIVIDEND_CONFIG.validationDelay);

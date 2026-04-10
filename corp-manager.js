@@ -376,13 +376,14 @@ async function evaluateCondition(ns, corp, condition) {
                 };
                 
             case 'profit_margin':
-                // Simplified profit margin calculation
-                const profitPerShare = corp.sharePrice - (corp.issuedShares > 0 ? corp.shareSalePrice : 0);
-                const margin = profitPerShare / corp.sharePrice;
-                
+                // API LIMITATION: CorporationInfo has no cost basis property (shareSalePrice does not exist).
+                // Only sharePrice (current price), numShares (shares owned), and issuedShares are available.
+                // Without purchase price history, profit margin cannot be calculated.
+                // Alternative: Use 'shares_owned' or 'total_value' conditions for similar behavior.
+                // See: https://raw.githubusercontent.com/bitburner-official/bitburner-src/dev/markdown/bitburner.corporationinfo.md
                 return {
-                    shouldTerminate: margin >= condition.value,
-                    reason: `Profit margin high enough (${(margin*100).toFixed(1)}% >= ${(condition.value*100).toFixed(1)}%)`
+                    shouldTerminate: false,
+                    reason: 'profit_margin disabled - API lacks cost basis data (CorporationInfo has sharePrice but no shareSalePrice/purchase history)'
                 };
                 
             case 'total_value':
@@ -752,10 +753,10 @@ async function optimizeRAMUsage(ns) {
     for (const proc of processes) {
         if (PROTECTED_MODULES.includes(proc.filename)) continue;
         
-        // Only kill if the module is marked as 'low priority' in our config
+        // Only kill if the module is marked as low priority (priority >= 3) in our config
         const moduleEntry = Object.values(MODULES).find(m => m.file === proc.filename);
-        if (moduleEntry && moduleEntry.priority === 'low') {
-            ns.print(`Terminating low-priority module: ${proc.filename}`);
+        if (moduleEntry && moduleEntry.priority >= 3) {
+            ns.print(`Terminating low-priority module: ${proc.filename} (priority: ${moduleEntry.priority})`);
             await ns.kill(proc.pid);
         }
     }

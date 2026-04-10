@@ -4,31 +4,7 @@
  * Based on mathematical formulas from the Bitburner Corporation Strategy Guide
  */
 
-import { log, checkNsInstance } from './helpers.js';
-
-/**
- * Sets corporation dividend percentage to maximum (100%) for pre-ascension payout
- * @param {NS} ns - Netscript instance
- * @param {string} context - Context message for logging
- */
-export async function maximizeDividends(ns, context = '') {
-    checkNsInstance(ns, '"maximizeDividends"');
-    try {
-        // Check if corporation API exists (requires BN3 or SF3, disabled in BN8)
-        if (!ns.corporation) {
-            return; // Silently skip if no API access
-        }
-        const corp = await ns.corporation.getCorporation();
-        if (!corp) {
-            log(ns, `INFO: No corporation found${context ? ' - ' + context : ''}`, false, 'info');
-            return;
-        }
-        await ns.corporation.issueDividends(1.0);
-        log(ns, `SUCCESS: Dividends maximized to 100%${context ? ' - ' + context : ''}`, false, 'success');
-    } catch (error) {
-        log(ns, `WARNING: Failed to maximize dividends${context ? ' - ' + context : ''}: ${error?.message || error}`, false, 'warning');
-    }
-}
+import { log } from './helpers.js';
 
 // ============================================================================
 // BOOST MATERIAL CONSTANTS AND CALCULATIONS

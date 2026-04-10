@@ -1,4 +1,4 @@
-import { getNsDataThroughFile, log, formatMoney, getCachedCorpData, handleCorpError, safeCorpOperation, getTobaccoDivision, isDivisionValid, asleep } from './helpers.js'
+import { getNsDataThroughFile, log, formatMoney, getCachedCorpData, handleCorpError, safeCorpOperation, getTobaccoDivision, isDivisionValid, asleep } from '../helpers.js'
 import { calculateOptimalPartyCost, calculatePerfMult } from '../corp-helpers.js'
 
 // Fix #6: Global Constant Definitions
