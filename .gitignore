@@ -2,3 +2,5 @@
 *.txt
 .vscode/*.*
 *.ts
+test-helpers.js
+test.js
