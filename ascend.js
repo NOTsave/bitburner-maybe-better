@@ -56,7 +56,7 @@ export async function main(ns) {
     if (!pid) log(ns, 'WARNING: Failed to start spend-hacknet-hashes.js', false, 'warning');
 
     // If we do not have tix api access, we cannot automate checking on or selling stocks, so skip this
-    const hasTixApiAccess = await getNsDataThroughFile(ns, `ns.stock.hasTixApiAccess()`);
+    const hasTixApiAccess = await getNsDataThroughFile(ns, `(() => { try { return ns.stock.hasTixApiAccess(); } catch { return false; } })()`);
     if (hasTixApiAccess) {
         const stkSymbols = await getStockSymbols(ns);
         const countOwnedStocks = async () => await getNsDataThroughFile(ns, `ns.args.map(sym => ns.stock.getPosition(sym))` +

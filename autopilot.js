@@ -1015,9 +1015,9 @@ export async function main(ns) {
         if (await checkIfGrafting(ns))
             return true;
         // Are we close to being able to afford 4S TIX data?
-        if (!have4STixApi) have4STixApi = await getNsDataThroughFile(ns, `ns.stock.has4SDataTixApi()`);
+        if (!have4STixApi) have4STixApi = await getNsDataThroughFile(ns, `(() => { try { return ns.stock.has4SDataTixApi(); } catch { return false; } })()`);
         if (!options['disable-wait-for-4s'] && !have4STixApi) {
-            if (!have4SData) have4SData = await getNsDataThroughFile(ns, `ns.stock.has4SData()`);
+            if (!have4SData) have4SData = await getNsDataThroughFile(ns, `(() => { try { return ns.stock.has4SData(); } catch { return false; } })()`);
             const totalWorth = player.money + await getStocksValue(ns);
             const totalCost = 25E9 * bitNodeMults.FourSigmaMarketDataApiCost +
                 (have4SData ? 0 : 1E9 * bitNodeMults.FourSigmaMarketDataCost);

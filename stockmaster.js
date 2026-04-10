@@ -80,7 +80,7 @@ export async function main(ns) {
 
     // If given the "liquidate" command, try to kill any versions of this script trading in stocks
     // NOTE: We must do this immediately before we start resetting / overwriting global state below (which is shared between script instances)
-    const hasTixApiAccess = await getNsDataThroughFile(ns, 'ns.stock.hasTixApiAccess()');
+    const hasTixApiAccess = await getNsDataThroughFile(ns, `(() => { try { return ns.stock.hasTixApiAccess(); } catch { return false; } })()`);
     if (runOptions.l || runOptions.liquidate) {
         if (!hasTixApiAccess) return doLog(ns, 'ERROR: Cannot liquidate stocks because we do not have Tix Api Access', true, 'error');
         doLog(ns, 'INFO: Killing any other stockmaster processes...', false, 'info');
@@ -628,7 +628,7 @@ async function tryGet4SApi(ns, playerStats, budget) {
  * @param {"hasWseAccount"|"hasTixApiAccess"|"has4SData"|"has4SDataTixApi"} stockFn
  * Helper to check for one of the stock access functions */
 async function checkAccess(ns, stockFn) {
-    return await getNsDataThroughFile(ns, `ns.stock.${stockFn}()`)
+    return await getNsDataThroughFile(ns, `(() => { try { return ns.stock.${stockFn}(); } catch { return false; } })()`)
 }
 
 /** @param {NS} ns

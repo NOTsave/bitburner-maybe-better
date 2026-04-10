@@ -313,6 +313,14 @@ export async function main(ns) {
             resetInfo = { currentNode: 1, lastAugReset: Date.now() };
         }
         bitNodeN = resetInfo.currentNode;
+        // Detect bitnode change and clear stale temp files to avoid using cached data from previous runs
+        const bitnodeMarkerFile = '/Temp/daemon-last-bitnode.txt';
+        const lastBitnode = ns.read(bitnodeMarkerFile);
+        if (lastBitnode !== String(bitNodeN)) {
+            log(ns, `INFO: Bitnode change detected (${lastBitnode || 'none'} -> ${bitNodeN}). Clearing stale temp files...`);
+            // Use runCommand to avoid adding ns.fileExists/ns.rm to daemon's static RAM cost
+            await runCommand(ns, `['/Temp/scanAllServers.txt','/Temp/getServerMaxRam-all.txt','/Temp/getServerRequiredHackingLevel-all.txt','/Temp/getServerNumPortsRequired-all.txt','/Temp/getServerGrowth-all.txt','/Temp/getServer.txt','/Temp/getServerMinSecurityLevel-all.txt','/Temp/getServerMaxMoney-all.txt'].forEach(f=>{try{ns.rm(f)}catch{}}); ns.write('${bitnodeMarkerFile}','${bitNodeN}','w')`, '/Temp/clear-stale-files.js');
+        }
         dictSourceFiles = await getActiveSourceFiles_Custom(ns, getNsDataThroughFile);
         log(ns, "The following source files are active: " + JSON.stringify(dictSourceFiles));
 
@@ -1096,8 +1104,8 @@ export async function main(ns) {
 
         // Hack: Below concerns aren't related to "server data", but are things we also wish to refresh just once in a while
         // Determine whether we have purchased stock API accesses yet (affects reserving and attempts to manipulate stock markets)
-        haveTixApi = haveTixApi || await getNsDataThroughFile(ns, `ns.stock.hasTixApiAccess()`);
-        have4sApi = have4sApi || await getNsDataThroughFile(ns, `ns.stock.has4SDataTixApi()`);
+        haveTixApi = haveTixApi || await getNsDataThroughFile(ns, `(() => { try { return ns.stock.hasTixApiAccess(); } catch { return false; } })()`);
+        have4sApi = have4sApi || await getNsDataThroughFile(ns, `(() => { try { return ns.stock.has4SDataTixApi(); } catch { return false; } })()`);
         // If required, determine the current terminal server (used when intelligence farming)
         if (options.i)
             currentTerminalServer = getServerByName(await getNsDataThroughFile(ns, 'ns.singularity.getCurrentServer()'));
