@@ -1059,11 +1059,14 @@ export async function main(ns) {
 
     // Get a dictionary from retrieving the same infromation for every server name
     // v3.x: Non-hackable servers (hacknet, darkweb) now throw errors. Use fallback values.
-    // IMPORTANT: ns.exec args must be primitives only — serialize arrays via JSON
-    async function getServersDictSafe(ns, command, fallback = null) {
+    // CRITICAL: v3.x ns.exec args must be primitives only — no null, no arrays.
+    // Use "null" string for null, JSON.stringify for arrays, -1 for Infinity.
+    async function getServersDictSafe(ns, command, fallback = -1) {
+        // Convert special fallback values to exec-safe primitives
+        const safeFallback = fallback === null ? "null" : fallback === Infinity ? -1 : fallback;
         return await getNsDataThroughFile(ns, 
-            `Object.fromEntries(JSON.parse(ns.args[0]).map(server => { try { return [server, ns.${command}(server)]; } catch { return [server, ns.args[1]]; } }))`,
-            `/Temp/${command}-all.txt`, [JSON.stringify(allHostNames), fallback]);
+            `let fb = ns.args[1]; if(fb==="null")fb=null; Object.fromEntries(JSON.parse(ns.args[0]).map(server => { try { return [server, ns.${command}(server)]; } catch { return [server, fb]; } }))`,
+            `/Temp/${command}-all.txt`, [JSON.stringify(allHostNames), safeFallback]);
     }
     async function getServersDict(ns, command) {
         return await getServersDictSafe(ns, command);

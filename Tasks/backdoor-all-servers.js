@@ -48,8 +48,8 @@ export async function main(ns) {
         }
         // Get the root status for each server
         const dictRootAccess = await getNsDataThroughFile(ns,
-            `Object.fromEntries(ns.args.map(server => [server, ns.hasRootAccess(server)]))`,
-            '/Temp/hasRootAccess-all.txt', hackableServers);
+            `Object.fromEntries(JSON.parse(ns.args[0]).map(server => [server, ns.hasRootAccess(server)]))`,
+            '/Temp/hasRootAccess-all.txt', [JSON.stringify(hackableServers)]);
 
         ns.print(`${hackableServers.length} not-owned servers on the network.`);
         ns.print(`${hackableServers.filter(s => dictRootAccess[s]).length} servers are currently rooted.`);
@@ -58,8 +58,8 @@ export async function main(ns) {
 
         // Get the set of servers that do not yet have a backdoor installed
         let toBackdoor = await getNsDataThroughFile(ns,
-            `ns.args.filter(server => !ns.getServer(server).backdoorInstalled)`,
-            '/Temp/getServers-where-not-backdoorInstalled.txt', hackableServers);
+            `JSON.parse(ns.args[0]).filter(server => !ns.getServer(server).backdoorInstalled)`,
+            '/Temp/getServers-where-not-backdoorInstalled.txt', [JSON.stringify(hackableServers)]);
         let count = toBackdoor.length;
         // Early exit condition if there are no servers left to backdoor
         ns.print(`${count} servers have yet to be backdoored.`);
