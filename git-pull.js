@@ -40,8 +40,7 @@ export async function main(ns) {
         else
             ns.tprint(`WARNING: "${fullLocalFilePath}" was not updated. (Currently running, or not located at ${remoteFilePath}?)`)
     }
-    ns.tprint(`INFO: Pull complete. If you have any questions or issues, create an issue on github or join the ` +
-        );
+    ns.tprint(`INFO: Pull complete. If you have any questions or issues, create an issue on github or join the `);
     // Remove any temp files / scripts from the prior version
     ns.run(pathJoin(options.subfolder, `cleanup.js`));
 }
@@ -49,7 +48,7 @@ export async function main(ns) {
 /** Removes leading and trailing slashes from the specified string */
 function trimSlash(s) {
     // Once upon a time, the game API required folders to have a leading slash
-    // As of 2.3.1, not only is this no longer needed, but it can break the game.
+    // As of 3.0.0, not only is this no longer needed, but it can break the game.
     if (s.startsWith('/'))
         s = s.slice(1);
     if (s.endsWith('/'))
