@@ -81,12 +81,12 @@ if (!hasDarknetAccess) {
 try {
 hasDarknetAccess = await cc(ns, 'typeof ns.darknet !== "undefined"');
 } catch (e) {
-return log(ns, 'ERROR: Darknet API not available. Requires appropriate SourceFile or BitNode.', true, 'error');
+return log(ns, 'INFO: Darknet API not available yet. Requires appropriate SourceFile or BitNode.', false, 'info');
 }
 }
 
 if (!hasDarknetAccess) {
-return log(ns, 'ERROR: Darknet API not available.', true, 'error');
+return log(ns, 'INFO: Darknet API not available.', false, 'info');
 }
 
 log(ns, '🌐 Darknet Manager started', false, 'success');

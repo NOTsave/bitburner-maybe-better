@@ -1059,14 +1059,15 @@ export async function main(ns) {
 
     // Get a dictionary from retrieving the same infromation for every server name
     // v3.x: Non-hackable servers (hacknet, darkweb) now throw errors. Use fallback values.
-    // CRITICAL: v3.x ns.exec args must be primitives only — no null, no arrays.
-    // Use "null" string for null, JSON.stringify for arrays, -1 for Infinity.
+    // CRITICAL: v3.x ns.exec args must be primitives only — no null, no arrays, no Infinity.
+    // Use sentinel values: -1 for Infinity, 0 for null (getServer only, truthiness check handles it).
     async function getServersDictSafe(ns, command, fallback = -1) {
-        // Convert special fallback values to exec-safe primitives
-        const safeFallback = fallback === null ? "null" : fallback === Infinity ? -1 : fallback;
-        return await getNsDataThroughFile(ns, 
-            `let fb = ns.args[1]; if(fb==="null")fb=null; Object.fromEntries(JSON.parse(ns.args[0]).map(server => { try { return [server, ns.${command}(server)]; } catch { return [server, fb]; } }))`,
-            `/Temp/${command}-all.txt`, [JSON.stringify(allHostNames), safeFallback]);
+        // Map fallback to exec-safe primitive. 0 means null for getServer.
+        const execSafe = (fallback === null) ? 0 : (fallback === Infinity || fallback === -1) ? -1 : fallback;
+        const nullCheck = (fallback === null) ? `ns.args[1]===0?null:ns.args[1]` : `ns.args[1]`;
+        return await getNsDataThroughFile(ns,
+            `Object.fromEntries(JSON.parse(ns.args[0]).map(server => { try { return [server, ns.${command}(server)]; } catch { return [server, ${nullCheck}]; } }))`,
+            `/Temp/${command}-all.txt`, [JSON.stringify(allHostNames), execSafe]);
     }
     async function getServersDict(ns, command) {
         return await getServersDictSafe(ns, command);
@@ -1413,6 +1414,11 @@ export async function main(ns) {
         const percentPerHackThread = currentTarget.percentageStolenPerHackThread();
         const oldHackThreads = currentTarget.getHackThreadsNeeded();
         const oldActualPercentageToSteal = currentTarget.percentageToSteal = currentTarget.actualPercentageToSteal();
+        // v3.x: Guard against servers with missing data that cause undefined percentages
+        if (oldActualPercentageToSteal === undefined || isNaN(oldActualPercentageToSteal) || !percentPerHackThread) {
+            log(ns, `WARN: Skipping performance optimization for ${currentTarget.name} - missing server data`, false, 'warning');
+            return;
+        }
 
         if (percentPerHackThread >= 1) {
             currentTarget.percentageToSteal = percentPerHackThread;
@@ -1866,6 +1872,11 @@ export async function main(ns) {
     async function prepServer(ns, currentTarget) {
         // Check if already prepped or in targeting mode, in which case presume prep server is to be skipped.
         if (currentTarget.isPrepped() || (await currentTarget.isTargeting())) return null;
+        // v3.x: Guard against servers with missing data (e.g. non-hackable fallbacks)
+        if (!currentTarget.getMinSecurity() || !currentTarget.getMaxMoney()) {
+            log(ns, `WARN: Skipping prep for ${currentTarget.name} - missing server data`, false, 'warning');
+            return false;
+        }
         let start = Date.now();
         let now = new Date(start.valueOf());
         let weakenTool = getTool("weak"), growTool = getTool("grow");
@@ -2533,12 +2544,13 @@ export async function main(ns) {
                 // because doTargetingLoop() is an infinite loop (unless runOnce is true)
                 log(ns, `INFO: startup() returned successfully - this should only happen with --run-once flag`, false, 'info');
             } catch (err) {
-                if (startupAttempts == 5)
+                if (startupAttempts >= 5)
                     log(ns, `ERROR: daemon.js Keeps catching a fatal error during startup: ${getErrorInfo(err)}`, true, 'error');
                 else {
                     log(ns, `WARN: daemon.js Caught an error during startup: ${getErrorInfo(err)}` +
                         `\nWill try again (attempt ${startupAttempts} of 5)`, false, 'warning');
-                    await ns.sleep(5000);
+                    // CRITICAL: Sleep between retries to prevent game freeze
+                    await ns.sleep(10000);
                 }
             }
         }
