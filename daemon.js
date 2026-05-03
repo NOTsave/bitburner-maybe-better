@@ -415,6 +415,7 @@ export async function main(ns) {
             { name: "sleeve.js", shouldRun: () => reqRam(64) && 10 in dictSourceFiles }, // Script to create manage our sleeves for us
             { name: "gangs.js", shouldRun: () => reqRam(64) && 2 in dictSourceFiles }, // Script to create manage our gang for us
             { name: "corp-fetcher.js", shouldRun: () => (bitNodeN === 3 || 3 in dictSourceFiles) && bitNodeN !== 8, args: [], shouldTail: false }, // Corp API requires BN3 or SF3. Disabled in BN8. Script exits cleanly if no corp exists
+            { name: "Darknet/darknet-manager.js", shouldRun: () => homeServer?.ramAvailable(true) >= 8, args: [], shouldTail: false }, // Darknet automation - runs if enough RAM available
             {
                 name: "work-for-factions.js", args: ['--fast-crimes-only', '--no-coding-contracts'],  // Singularity script to manage how we use our "focus" work.
                 shouldRun: () => 4 in dictSourceFiles && reqRam(256 / (2 ** dictSourceFiles[4]) && !studying) // Higher SF4 levels result in lower RAM requirements

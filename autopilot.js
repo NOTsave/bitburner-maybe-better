@@ -1,7 +1,7 @@
 import { log, getConfiguration, instanceCount, getNsDataThroughFile, runCommand, waitForProcessToComplete,
     getActiveSourceFiles, tryGetBitNodeMultipliers, getStocksValue, unEscapeArrayArgs,
     formatMoney, formatDuration, formatNumber, getErrorInfo, tail, jsonReplacer, getFilePath, DEFAULT_CORP_DATA_PATH, getCachedCorpData } from './helpers.js'
-import { maximizeDividends } from './Corp/corp-dividend-manager.js'
+import { maximizeDividends, setOperatingDividends, getCurrentDividendPercentage } from './Corp/corp-dividend-manager.js'
 
 // Cache frequently used format functions to reduce property access
 const fmtMoney = formatMoney;
@@ -254,6 +254,7 @@ export async function main(ns) {
         manageReservedMoney(ns, player, stocksValue);
         await checkOnDaedalusStatus(ns, player, stocksValue);
         await checkIfBnIsComplete(ns, player);
+        await maybeCoordinateDividends(ns); // Sync dividend rate with corp-manager operating state
         await maybeAcceptStaneksGift(ns, player);
         await checkOnRunningScripts(ns, player);
         await maybeDoCasino(ns, player);
@@ -1188,6 +1189,36 @@ export async function main(ns) {
         if (logged_once.has(message))
             return;
         logged_once.add(log(ns, message, alsoPrintToTerminal, toastStyle));
+    }
+
+    let lastDividendCheck = 0;
+    /** Coordinate dividend rate with corp-manager.js operating state.
+     * When corp-manager is running, keep dividends at operating level (35%).
+     * When corp-manager self-terminates (all goals met), maximize to 100%.
+     * @param {NS} ns */
+    async function maybeCoordinateDividends(ns) {
+        const now = Date.now();
+        if (now - lastDividendCheck < 60000) return; // Check every 60 seconds
+        lastDividendCheck = now;
+
+        try {
+            const hasCorp = await getNsDataThroughFile(ns, 'ns.corporation.hasCorporation()');
+            if (!hasCorp) return;
+
+            const corpManagerRunning = ns.isRunning(getFilePath('corp-manager.js'), 'home');
+            const currentDividend = await getCurrentDividendPercentage(ns);
+
+            if (corpManagerRunning && currentDividend > 50) {
+                // Corp-manager is active — keep dividends at operating level so it has funds to work with
+                await setOperatingDividends(ns, 35, 'Corp-manager active - maintaining operating funds');
+            } else if (!corpManagerRunning && currentDividend < 90) {
+                // Corp-manager self-terminated (all goals met) — maximize payouts
+                await maximizeDividends(ns, 'Corp-manager complete - maximizing player dividends');
+            }
+        } catch (e) {
+            // Non-critical — don't block the main loop if this fails
+            log(ns, `INFO: Dividend coordination skipped: ${e?.message || String(e)}`, false, 'info');
+        }
     }
 
     // Invoke the main function
