@@ -18,8 +18,8 @@ export async function main(ns) {
     }
     
     // Whitelist: Protect corporate communication and essential data
-    // ns-* protects API temp files (ns-corporation-*, ns-gang-*, etc.) used by getNsDataThroughFile
-    const PROTECTED_PREFIXES = ['corp-', 'permanent-', 'stock-', 'ns-'];
+    // ns-* temp files are stale and should be cleaned on restart
+    const PROTECTED_PREFIXES = ['corp-', 'permanent-', 'stock-'];
     const TEMP_DIR = 'Temp/';
     
     // Enhanced path safety validation to prevent directory traversal

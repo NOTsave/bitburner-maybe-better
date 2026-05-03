@@ -1110,8 +1110,8 @@ export async function main(ns) {
     async function refreshDynamicServerData(ns) {
         if (verbose) log(ns, `refreshDynamicServerData: ${allHostNames}`);
         // Min Security / Max Money can be affected by Hashnet purchases, so we should update this occasionally
-        dictServerMinSecurityLevels = await getServersDictSafe(ns, 'getServerMinSecurityLevel', 100);
-        dictServerMaxMoney = await getServersDictSafe(ns, 'getServerMaxMoney', 0);
+        dictServerMinSecurityLevels = await getServersDictSafe(ns, 'getServerMinSecurityLevel', 1);
+        dictServerMaxMoney = await getServersDictSafe(ns, 'getServerMaxMoney', 1);
         // Get the information about the relative profitability of each server (affects targetting order)
         const pid = await exec(ns, getFilePath('analyze-hack.js'), null, null, '--all', '--silent');
         await waitForProcessToComplete_Custom(ns, getHomeProcIsAlive(ns), pid);
@@ -1398,13 +1398,20 @@ export async function main(ns) {
     }
 
     // Produce a summary string containing information about a hack batch for a given target configuration
-    let getTargetSummary = currentTarget =>
-        `(H:${currentTarget.getHackThreadsNeeded()} W:${currentTarget.getWeakenThreadsNeededAfterTheft()} ` +
-        `G:${currentTarget.getGrowThreadsNeededAfterTheft()} W²:${currentTarget.getWeakenThreadsNeededAfterGrowth()}) ` +
-        (stockMode && shouldManipulateGrow[currentTarget.name] ? 'with grow stock ' : stockMode && shouldManipulateHack[currentTarget.name] ? 'with hack stock ' : '') +
-        `to steal ${formatNumber(currentTarget.actualPercentageToSteal() * 100)}% ` +
-        `(${formatMoney(currentTarget.actualPercentageToSteal() * currentTarget.getMaxMoney(), 3, 1)}) ` +
-        `ETA: ${formatDuration(currentTarget.timeToWeaken())} at Hack ${playerHackSkill()} (${currentTarget.name})`;
+    let getTargetSummary = currentTarget => {
+        try {
+            const pct = currentTarget.actualPercentageToSteal();
+            if (pct === undefined || isNaN(pct) || pct === null || !currentTarget.getMinSecurity()) return `(missing data for ${currentTarget.name})`;
+            return `(H:${currentTarget.getHackThreadsNeeded()} W:${currentTarget.getWeakenThreadsNeededAfterTheft()} ` +
+            `G:${currentTarget.getGrowThreadsNeededAfterTheft()} W²:${currentTarget.getWeakenThreadsNeededAfterGrowth()}) ` +
+            (stockMode && shouldManipulateGrow[currentTarget.name] ? 'with grow stock ' : stockMode && shouldManipulateHack[currentTarget.name] ? 'with hack stock ' : '') +
+            `to steal ${formatNumber(pct * 100)}% ` +
+            `(${formatMoney(pct * currentTarget.getMaxMoney(), 3, 1)}) ` +
+            `ETA: ${formatDuration(currentTarget.timeToWeaken())} at Hack ${playerHackSkill()} (${currentTarget.name})`;
+        } catch (e) {
+            return `(missing data for ${currentTarget.name})`;
+        }
+    }
 
     // Adjusts the "percentage to steal" for a target based on its respective cost and the current network RAM available
     function optimizePerformanceMetrics(ns, currentTarget) {

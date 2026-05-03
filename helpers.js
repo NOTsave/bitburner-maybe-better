@@ -125,6 +125,7 @@ export const FACTION_DATA = {
  * @param {number=} minDecimalPlaces - (default: 3) The minimum decimal places you wish to see, regardless of significant figures. (e.g. 12.3, 1.2, 0.1 all have 1 decimal)
  **/
 export function formatNumber(ns, num, minSignificantFigures = 3, minDecimalPlaces = 1) {
+    if (num === undefined || num === null || isNaN(num)) return "N/A";
     // Try to use ns.format.number (v3.x API) first
     if (ns && ns.format && typeof ns.format.number === 'function') {
         try {
