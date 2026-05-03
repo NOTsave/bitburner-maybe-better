@@ -112,10 +112,14 @@ async function tryToBuyBestServerPossible(ns) {
     if (purchasedServers == null) // Early game, if we have insufficient RAM (1.05 GB cloud.getServerNames + 1.6 base cost), we can fall-back to guessing based on their name
         purchasedServers = rootedServers.filter(s => s.startsWith(purchasedServerName));
     // If some of the servers are hacknet servers, and they aren't being used for scripts, ignore the RAM they have available
+    // v3.x: Non-hackable servers throw on getServerUsedRam. Use safe wrapper.
+    const getServerUsedRamSafe = (s) => { try { return ns.getServerUsedRam(s); } catch { return 0; } };
+    const getServerMaxRamSafe = (s) => { try { return ns.getServerMaxRam(s); } catch { return 0; } };
+    
     // with the assumption that these are reserved for generating hashes
     const likelyHacknet = rootedServers.filter(s => s.startsWith("hacknet-node-") || s.startsWith('hacknet-server-'));
     if (likelyHacknet.length > 0) {
-        const totalHacknetUsedRam = likelyHacknet.reduce((t, s) => t + ns.getServerUsedRam(s), 0);
+        const totalHacknetUsedRam = likelyHacknet.reduce((t, s) => t + getServerUsedRamSafe(s), 0);
         if (totalHacknetUsedRam == 0) {
             rootedServers = rootedServers.filter(s => !likelyHacknet.includes(s));
             log(ns, `Removing ${likelyHacknet.length} hacknet servers from RAM statistics since they are not being utilized.`)
@@ -123,8 +127,8 @@ async function tryToBuyBestServerPossible(ns) {
             log(ns, `We are currently using ${formatRam(totalHacknetUsedRam)} of hacknet RAM, so including hacknet in our utilization stats.`)
     }
 
-    const totalMaxRam = rootedServers.reduce((t, s) => t + ns.getServerMaxRam(s), 0);
-    const totalUsedRam = rootedServers.reduce((t, s) => t + ns.getServerUsedRam(s), 0);
+    const totalMaxRam = rootedServers.reduce((t, s) => t + getServerMaxRamSafe(s), 0);
+    const totalUsedRam = rootedServers.reduce((t, s) => t + getServerUsedRamSafe(s), 0);
     if (options['utilization-trigger'] > 0) {
         const utilizationRate = totalUsedRam / totalMaxRam;
         setStatus(ns, `Using ${Math.round(totalUsedRam).toLocaleString('en')}/${formatRam(totalMaxRam)} (` +
@@ -187,9 +191,10 @@ async function tryToBuyBestServerPossible(ns) {
         // Abort if our home server is more than x times bettter (rough guage of how much we 'need' Daemon RAM at the current stage of the game?)
         const homeThreshold = options['compare-to-home-threshold'];
         // Unless we're looking at buying the maximum purchasable server size - in which case we can do no better
-        if (maxRamPossibleToBuy < ns.getServerMaxRam("home") * homeThreshold)
+        const homeRam = getServerMaxRamSafe("home");
+        if (maxRamPossibleToBuy < homeRam * homeThreshold)
             return setStatus(ns, `${prefix}the most RAM we can buy (${formatRam(maxRamPossibleToBuy)}) on our budget of ${formatMoney(spendableMoney)} ` +
-                `is less than --compare-to-home-threshold (${homeThreshold}) x home RAM (${formatRam(ns.getServerMaxRam("home"))})`);
+                `is less than --compare-to-home-threshold (${homeThreshold}) x home RAM (${formatRam(homeRam)})`);
         // Abort if purchasing this server wouldn't improve our total RAM by more than x% (ensures we buy in meaningful increments)
         const networkThreshold = options['compare-to-network-ram-threshold'];
         if (maxRamPossibleToBuy / totalMaxRam < networkThreshold)
@@ -199,7 +204,7 @@ async function tryToBuyBestServerPossible(ns) {
 
     // Collect information about other previoulsy purchased servers
     const maxPurchasableServerRam = Math.pow(2, maxPurchasableServerRamExponent);
-    const ramByServer = Object.fromEntries(purchasedServers.map(server => [server, ns.getServerMaxRam(server)]));
+    const ramByServer = Object.fromEntries(purchasedServers.map(server => [server, getServerMaxRamSafe(server)]));
     let [worstServerName, worstServerRam] = purchasedServers.reduce(([minS, minR], s) =>
         ramByServer[s] < minR ? [s, ramByServer[s]] : [minS, minR], [null, maxPurchasableServerRam]);
     let [bestServerName, bestServerRam] = purchasedServers.reduce(([maxS, maxR], s) =>

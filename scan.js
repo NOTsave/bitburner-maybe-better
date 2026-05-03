@@ -52,9 +52,14 @@ export function main(ns) {
 
     const myHackLevel = ns.getHackingLevel();
 
+    // v3.x: Non-hackable servers throw on getServer. Use safe wrapper.
+    function getServerInfoSafe(serverName) {
+        try { return ns.getServer(serverName); }
+        catch { return { requiredHackingSkill: Infinity, hasAdminRights: false, purchasedByPlayer: false, backdoorInstalled: true, moneyMax: 0, moneyAvailable: 0, hackDifficulty: 100, minDifficulty: 100, maxRam: 0, ramUsed: 0, cpuCores: 1 }; }
+    }
     function getServerInfo(serverName) {
         // Costs 2 GB. If you can't don't need backdoor links, uncomment and use the alternate implementations below
-        return ns.getServer(serverName)
+        return getServerInfoSafe(serverName)
         // return {
         //     requiredHackingSkill: !serverName.startsWith("daemon") && !serverName.startsWith("hacknet-server-") ? ns.getServerRequiredHackingLevel(serverName) : 0,
         //     hasAdminRights: ns.hasRootAccess(serverName),

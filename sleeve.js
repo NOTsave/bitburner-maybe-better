@@ -249,7 +249,7 @@ async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrai
                 await promptForTrainingBudget(ns); // If we've never checked, see if we can train into debt.
             if (sleeve.city != ns.enums.CityName.Sector12) {
                 log(ns, `Moving Sleeve ${i} from ${sleeve.city} to Sector-12 so that they can study at Powerhouse Gym.`);
-                await getNsDataThroughFile(ns, 'ns.sleeve.travel(ns.args[0], ns.args[1])', null, [i, ns.enums.CityName.Sector12]);
+                await getNsDataThroughFile(ns, 'ns.sleeve.travel(i, ns.enums.CityName.Sector12)', null, [i, ns.enums.CityName.Sector12]);
             }
             var trainStat = untrainedStats.reduce((min, s) => sleeve.skills[s] < sleeve.skills[min] ? s : min, untrainedStats[0]);
             var gym = ns.enums.LocationName.Sector12PowerhouseGym;
@@ -265,6 +265,7 @@ async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrai
                 await promptForTrainingBudget(ns); // check we can go into training debt
             if (sleeve.city != ns.enums.CityName.Volhaven) {
                 log(ns, `Moving Sleeve ${i} from ${sleeve.city} to Volhaven so that they can study at ZB Institute.`);
+                // v3.x: ns.sleeve.travel() now cancels the sleeve's current task
                 await getNsDataThroughFile(ns, 'ns.sleeve.travel(ns.args[0], ns.args[1])', null, [i, ns.enums.CityName.Volhaven]);
             }
             var trainSmart = untrainedSmarts.reduce((min, s) => sleeve.skills[s] < sleeve.skills[min] ? s : min, untrainedSmarts[0]);

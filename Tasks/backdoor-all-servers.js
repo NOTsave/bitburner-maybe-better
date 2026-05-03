@@ -36,10 +36,16 @@ export async function main(ns) {
         // Filter out servers that cannot or should not be hacked / backdoored
         const hackableServers = servers.filter(s => s != "home" && !s.includes("hacknet-") && !s.includes("daemon")) /*or whatever you name your purchased servers*/
 
-        // Get the required hacking level of each server
-        const dictRequiredHackingLevels = await getNsDataThroughFile(ns,
-            `Object.fromEntries(ns.args.map(server => [server, ns.getServerRequiredHackingLevel(server)]))`,
-            '/Temp/getServerRequiredHackingLevel-all.txt', hackableServers);
+        // Get the required hacking level of each server (handle non-hackable servers in 3.0)
+        const dictRequiredHackingLevels = {};
+        for (const server of hackableServers) {
+            try {
+                dictRequiredHackingLevels[server] = await getNsDataThroughFile(ns, 'ns.getServerRequiredHackingLevel(ns.args[0])', null, [server]);
+            } catch (e) {
+                // Skip servers that throw (non-hackable servers like hacknet, darkweb in 3.0)
+                dictRequiredHackingLevels[server] = Infinity;
+            }
+        }
         // Get the root status for each server
         const dictRootAccess = await getNsDataThroughFile(ns,
             `Object.fromEntries(ns.args.map(server => [server, ns.hasRootAccess(server)]))`,
