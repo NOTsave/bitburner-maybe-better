@@ -570,7 +570,7 @@ export async function crimeForKillsKarmaStats(ns, reqKills, reqKarma, reqStats, 
     let crime, lastCrime, crimeTime, lastStatusUpdateTime, needStats;
     while (forever || (needStats = anyStatsDeficient(player)) || player.numPeopleKilled < reqKills || -ns.heart.break() < reqKarma) {
         if (!forever && breakToMainLoop()) return ns.print('INFO: Interrupting crime to check on high-level priorities.');
-        let crimeChances = await getNsDataThroughFile(ns, `Object.fromEntries(ns.args.map(c => [c, ns.singularity.getCrimeChance(c)]))`, GENERIC_TEMP_PATH + 'crime-chances.json', bestCrimesByDifficulty);
+        let crimeChances = await getNsDataThroughFile(ns, `Object.fromEntries(JSON.parse(ns.args[0]).map(c => [c, ns.singularity.getCrimeChance(c)]))`, GENERIC_TEMP_PATH + 'crime-chances.json', [JSON.stringify(bestCrimesByDifficulty)]);
         let karma = -ns.heart.break();
         crime = crimeCount < 2 ? (crimeChances["Homicide"] > 0.75 ? "Homicide" : "Mug") : // Start with a few fast & easy crimes to boost stats if we're just starting
             (!needStats && (player.numPeopleKilled < reqKills || karma < reqKarma)) ? "Homicide" : // If *all* we need now is kills or Karma, homicide is the fastest way to do that, even at low proababilities

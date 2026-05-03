@@ -1192,6 +1192,7 @@ export async function main(ns) {
     }
 
     let lastDividendCheck = 0;
+let dividendFailures = 0;
     /** Coordinate dividend rate with corp-manager.js operating state.
      * When corp-manager is running, keep dividends at operating level (35%).
      * When corp-manager self-terminates (all goals met), maximize to 100%.
@@ -1209,15 +1210,24 @@ export async function main(ns) {
             const currentDividend = await getCurrentDividendPercentage(ns);
 
             if (corpManagerRunning && currentDividend > 50) {
-                // Corp-manager is active — keep dividends at operating level so it has funds to work with
                 await setOperatingDividends(ns, 35, 'Corp-manager active - maintaining operating funds');
+                dividendFailures = 0;
             } else if (!corpManagerRunning && currentDividend < 90) {
-                // Corp-manager self-terminated (all goals met) — maximize payouts
-                await maximizeDividends(ns, 'Corp-manager complete - maximizing player dividends');
+                const success = await maximizeDividends(ns, 'Corp-manager complete - maximizing player dividends');
+                if (!success) {
+                    dividendFailures++;
+                    // Only log after repeated failures, not every cycle
+                    if (dividendFailures === 1 || dividendFailures % 10 === 0) {
+                        log(ns, `INFO: Unable to set dividends (attempt ${dividendFailures}). Corp may be too new or have no revenue yet.`, false, 'info');
+                    }
+                } else {
+                    dividendFailures = 0;
+                }
+            } else {
+                dividendFailures = 0;
             }
         } catch (e) {
             // Non-critical — don't block the main loop if this fails
-            log(ns, `INFO: Dividend coordination skipped: ${e?.message || String(e)}`, false, 'info');
         }
     }
 
