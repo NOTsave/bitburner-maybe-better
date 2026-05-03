@@ -214,6 +214,18 @@ function checkBackwardsCompatibility(ns, command) {
             }, {});
         })()`;
 
+    // Workaround for v2.x deprecations: .state replaced with .nextState in Corporation API
+    // Avoid serializing deprecated .state property from getCorporation()
+    if (command === "ns.corporation.getCorporation()")
+        alteredCommand = `( ()=> { let corp = ns.corporation.getCorporation();
+            const excludeProperties = ['state'];
+            return Object.keys(corp).reduce((cCopy, key) => {
+                if (!excludeProperties.includes(key))
+                   cCopy[key] = corp[key];
+                return cCopy;
+            }, {});
+        })()`;
+
     return alteredCommand;
 }
 
@@ -272,7 +284,11 @@ export async function getNsDataThroughFile_Custom(ns, fnRun, command, fName = nu
     // Run the command with auto-retries if it fails
     const pid = await runCommand_Custom(ns, fnRun, commandToFile, fNameCommand, args, verbose, maxRetries, retryDelayMs, silent);
     // Wait for the process to complete. Note, as long as the above returned a pid, we don't actually have to check it, just the file contents
-    const fnIsAlive = (ignored_pid) => ns.read(fName) === initialContents;
+    // Fix: Also treat empty string (deleted file) as "still running" to avoid race condition with cleanup scripts
+    const fnIsAlive = (ignored_pid) => {
+        const contents = ns.read(fName);
+        return contents === initialContents || contents === "";
+    };
     await waitForProcessToComplete_Custom(ns, fnIsAlive, pid, verbose);
     if (verbose) log(ns, `Process ${pid} is done. Reading the contents of ${fName}...`);
     // Read the file, with auto-retries if it fails // TODO: Unsure reading a file can fail or needs retrying.
@@ -1169,21 +1185,13 @@ export async function safelyWriteData(ns, path, data, silent = false) {
             throw new Error(`Data too large: ${serialized.length} bytes`);
         }
         
-        // Defensive: try to remove file first if it exists (handles locked/corrupted files)
-        if (ns.fileExists(path)) {
-            ns.rm(path);
-        }
+        // Write and ignore return value - Bitburner's ns.write can return false even on success
+        await ns.write(path, serialized, 'w');
         
-        // Atomic write: Bitburner's file system can occasionally fail, retry immediately
-        const success = await ns.write(path, serialized, 'w') || 
-                        await ns.write(path, serialized, 'w') || 
-                        await ns.write(path, serialized, 'w');
-        if (!success) throw new Error('Failed to write file');
-        
-        // Verify the write was successful
-        const verification = ns.read(path);
-        if (verification !== serialized) {
-            throw new Error('Write verification failed');
+        // Verify by reading back
+        const readBack = ns.read(path);
+        if (readBack !== serialized) {
+            throw new Error(`Write verification failed: wrote ${serialized.length}, read ${readBack.length}`);
         }
         
         return true;

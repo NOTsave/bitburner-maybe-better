@@ -2,6 +2,15 @@ import { getNsDataThroughFile, log, safelyWriteData, DEFAULT_CORP_DATA_PATH, asl
 
 /** @param {NS} ns **/
 export async function main(ns) {
+    ns.print('corp-fetcher.js starting...');
+    
+    // Prevent multiple instances - only one fetcher should write to corp-data.json
+    const runningInstances = ns.ps('home').filter(p => p.filename === 'corp-fetcher.js');
+    if (runningInstances.length > 1) {
+        ns.print(`Another instance already running (PID: ${runningInstances[0].pid}), exiting.`);
+        return;
+    }
+    
     const DATA_PATH = DEFAULT_CORP_DATA_PATH;
 
     // Check if corporation API is available and corporation exists before entering main loop
@@ -25,9 +34,15 @@ export async function main(ns) {
             }
             const divisionsData = [];
             for (const div of corp.divisions) {
+                // Handle both string names and division objects
+                const name = typeof div === 'string' ? div : div?.name;
+                if (!name || name === 'undefined') {
+                    log(ns, `WARN: Skipping invalid division: ${JSON.stringify(div)}`, false, 'warning');
+                    continue;
+                }
+                
                 try {
                     // Fix #13: Explicit string cast
-                    const name = String(div.name);
                     const divInfo = await getNsDataThroughFile(ns, `ns.corporation.getDivision(ns.args[0])`, null, [name]);
                     
                     // Fix #6: Safe city mapping with explicit fallbacks
@@ -41,13 +56,13 @@ export async function main(ns) {
                         ...divInfo, 
                         cities,
                         name: name,
-                        type: divInfo.type || div.type || 'Unknown'
+                        type: divInfo.type || (typeof div === 'object' ? div.type : undefined) || 'Unknown'
                     });
                 } catch (e) {
                     // Fix #4: Preserve error details for better debugging
                     divisionsData.push({ 
-                        name: String(div.name), 
-                        type: div.type || 'Unknown',
+                        name: name, 
+                        type: (typeof div === 'object' ? div.type : undefined) || 'Unknown',
                         cities: [],
                         researchPoints: 0,
                         products: [],
@@ -56,7 +71,7 @@ export async function main(ns) {
                         msg: e.message || String(e),
                         timestamp: Date.now()
                     });
-                    log(ns, `WARN: Failed to fetch division ${div.name}: ${e.message || e}`, false, 'warning');
+                    log(ns, `WARN: Failed to fetch division ${name}: ${e.message || e}`, false, 'warning');
                 }
             }
 
@@ -70,8 +85,17 @@ export async function main(ns) {
                 timestamp: new Date().toISOString()
             };
 
+            // Debug: log data size before write
+            const dataSize = JSON.stringify(corpSummary).length;
+            if (dataSize > 100000) {
+                log(ns, `WARN: Corp data large: ${(dataSize/1024).toFixed(1)}KB`, false, 'warning');
+            }
+
             // Atomic write: use improved safelyWriteData with checksum/timestamp
-            await safelyWriteData(ns, DATA_PATH, corpSummary);
+            const writeSuccess = await safelyWriteData(ns, DATA_PATH, corpSummary);
+            if (!writeSuccess) {
+                log(ns, `ERROR: Write failed - data size: ${dataSize} bytes`, false, 'error');
+            }
             
         } catch (e) {
             // Single top-level catch handles all errors (fetch, division processing, write)
@@ -85,7 +109,7 @@ export async function main(ns) {
                 log(ns, 'INFO: Corporation sold during processing. corp-fetcher.js exiting.', false, 'info');
                 return;
             }
-            await ns.corporation.nextUpdate();
+            await getNsDataThroughFile(ns, 'ns.corporation.nextUpdate()');
         } catch {
             await asleep(ns, 2000);
         }

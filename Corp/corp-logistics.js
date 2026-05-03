@@ -16,7 +16,11 @@ const LOGISTICS_CONFIG = {
     upgradeThreshold: 1e12,    // Upgrades at 1T+ funds
     materialBuffer: 0.8,          // 80% warehouse capacity
     energyThreshold: 0.7,        // Refill energy below 70%
-    moraleThreshold: 0.6          // Morale below 60% = urgent action
+    moraleThreshold: 0.6,         // Morale below 60% = urgent action
+    
+    // Early game: Manual buy rate for Water/Chemicals (when Smart Supply disabled)
+    // Set to 0 to disable buying entirely, or small number (1-5) for slow production
+    earlyGameBuyRate: 5           // Buy 5/s of Water and Chemicals (cheap, keeps production going)
 };
 
 async function cc(ns, cmd, args = []) { 
@@ -26,14 +30,28 @@ async function cc(ns, cmd, args = []) {
 export async function main(ns) {
     log(ns, `🚚 Starting Logistics Manager (interval: ${LOGISTICS_CONFIG.checkInterval/1000}s)`, false, 'info');
     
+    // Prevent multiple instances - only one logistics manager should run
+    const runningInstances = ns.ps('home').filter(p => p.filename === 'Corp/corp-logistics.js');
+    if (runningInstances.length > 1) {
+        log(ns, `Another instance already running (PID: ${runningInstances[0].pid}), exiting.`, false, 'warning');
+        return;
+    }
+    
     while (true) {
         try {
             // Fix #1, #8: Use cached data instead of direct API call
             const corp = await getCachedCorpData(ns);
             if (!corp) { await ns.sleep(10000); continue; }
 
+            // --- EARLY GAME SMART SUPPLY MANAGEMENT ---
+            // Disable Smart Supply on Agriculture if Chemical doesn't exist (prevents buying inputs)
+            await manageEarlyGameSmartSupply(ns, corp);
+            
             // --- INTELLIGENT UPGRADES ---
             await manageUpgrades(ns, corp);
+            
+            // --- MATERIAL SALES (Agriculture/Chemical) ---
+            await manageMaterialSales(ns, corp);
             
             // --- ENERGY MANAGEMENT ---
             await manageEnergy(ns, corp);
@@ -47,6 +65,76 @@ export async function main(ns) {
         
         await asleep(ns, LOGISTICS_CONFIG.checkInterval);
     }
+}
+
+/**
+ * Early game: Manage Smart Supply on Agriculture if Chemical division doesn't exist
+ * Replaces aggressive Smart Supply with controlled buying to save funds
+ * @param {NS} ns
+ * @param {Object} corp - Corporation data
+ */
+async function manageEarlyGameSmartSupply(ns, corp) {
+    const agriDiv = corp.divisions.find(d => d.type === 'Agriculture');
+    const hasChemical = corp.divisions.some(d => d.type === 'Chemical');
+    
+    // If no Agriculture or Chemical exists, nothing to do
+    if (!agriDiv || hasChemical) return;
+    
+    const buyRate = LOGISTICS_CONFIG.earlyGameBuyRate;
+    
+    let totalWaterRate = 0;
+    let totalChemicalRate = 0;
+    
+    for (const city of agriDiv.cities) {
+        try {
+            const warehouse = await cc(ns, 'ns.corporation.getWarehouse(ns.args[0], ns.args[1])', 
+                [agriDiv.name, city]);
+            if (!warehouse) continue;
+            
+            // FORCE Smart Supply OFF every time - don't check, just disable
+            await cc(ns, 'ns.corporation.setSmartSupply(ns.args[0], ns.args[1], false)', 
+                [agriDiv.name, city]);
+            
+            if (warehouse.smartSupplyEnabled) {
+                log(ns, `WARN: DISABLED Smart Supply on ${agriDiv.name}/${city}`, false, 'warning');
+            }
+            
+            // Set controlled buy rates for early game (Water needed more than Chemicals)
+            // Water: 2/s (agriculture needs 0.5 water per production cycle)
+            // Chemicals: 1/s (agriculture needs 0.2 chemicals per production cycle)
+            const waterRate = buyRate > 0 ? 2 : 0;
+            const chemicalRate = buyRate > 0 ? 1 : 0;
+            
+            await cc(ns, 'ns.corporation.buyMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3])',
+                [agriDiv.name, city, 'Water', waterRate]);
+            await cc(ns, 'ns.corporation.buyMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3])',
+                [agriDiv.name, city, 'Chemicals', chemicalRate]);
+            
+            totalWaterRate += waterRate;
+            totalChemicalRate += chemicalRate;
+            
+            // Verify the buy rates were actually set
+            await ns.sleep(100); // Brief wait for API to apply
+            const waterMaterial = await cc(ns, 'ns.corporation.getMaterial(ns.args[0], ns.args[1], ns.args[2])',
+                [agriDiv.name, city, 'Water']);
+            const chemMaterial = await cc(ns, 'ns.corporation.getMaterial(ns.args[0], ns.args[1], ns.args[2])',
+                [agriDiv.name, city, 'Chemicals']);
+            
+            const actualWaterBuy = waterMaterial?.buyAmount || 0;
+            const actualChemBuy = chemMaterial?.buyAmount || 0;
+            
+            log(ns, `INFO: Set buy rates for ${agriDiv.name}/${city}: Water=${waterRate}/s (actual: ${actualWaterBuy}/s), Chemicals=${chemicalRate}/s (actual: ${actualChemBuy}/s)`, false, 'info');
+            
+            // Warn if actual rate doesn't match intended rate
+            if (Math.abs(actualChemBuy - chemicalRate) > 0.1) {
+                log(ns, `WARN: Chemical buy rate mismatch in ${agriDiv.name}/${city}! Intended: ${chemicalRate}/s, Actual: ${actualChemBuy}/s`, false, 'warning');
+            }
+        } catch (e) {
+            log(ns, `WARN: Failed to set buy rates for ${agriDiv.name}/${city}: ${e.message || e}`, false, 'warning');
+        }
+    }
+    
+    log(ns, `INFO: Total buy rates across ${agriDiv.cities.length} cities: Water=${totalWaterRate}/s, Chemicals=${totalChemicalRate}/s`, false, 'info');
 }
 
 async function manageUpgrades(ns, corp) {
@@ -64,12 +152,12 @@ async function manageUpgrades(ns, corp) {
     // CORRECTED per corp strategy guide: Export is mandatory for Round 2 ($20B)
     // Wilson is NOT retroactive - must buy BEFORE Advert purchases. Skip in early rounds.
     const PRIORITY_UNLOCKS = [
-        { name: 'Export', priority: 0, minPhase: 1 },           // CRITICAL: Required for Round 2 ($20B)
-        { name: 'Smart Supply', priority: 1, minPhase: 1 },    // Round 1: Skip if using custom Smart Supply script
-        { name: 'Smart Storage', priority: 2, minPhase: 1 },   // Round 1: Important for warehouse space
-        { name: 'Smart Factories', priority: 3, minPhase: 2 }, // Round 2+: Production boost
-        { name: 'DreamSense', priority: 4, minPhase: 3 },      // Late game
-        { name: 'Wilson', priority: 5, minPhase: 3 }           // Round 3+: Main profit driver (Wilson Analytics) - NOT RETROACTIVE!
+        { name: 'Office API', priority: 0, minPhase: 1 },      // PRIORITY 1: Required for employee job assignment
+        { name: 'Smart Supply', priority: 1, minPhase: 1 },     // CRITICAL: Required for production - auto buys Water/Energy
+        { name: 'Export', priority: 2, minPhase: 1 },          // Round 2: For selling products between divisions
+        { name: 'Smart Storage', priority: 3, minPhase: 1 },    // Round 1: Important for warehouse space
+        { name: 'Smart Factories', priority: 4, minPhase: 2 }, // Round 2+: Production boost
+        { name: 'Wilson', priority: 5, minPhase: 3 }            // Round 3+: Main profit driver (Wilson Analytics) - NOT RETROACTIVE!
     ];
     
     // Get current phase from corp state file
@@ -90,7 +178,9 @@ async function manageUpgrades(ns, corp) {
             const hasUnlock = await cc(ns, 'ns.corporation.hasUnlock(ns.args[0])', [unlock.name]);
             if (!hasUnlock) {
                 const cost = await cc(ns, 'ns.corporation.getUnlockCost(ns.args[0])', [unlock.name]);
-                if (corp.funds > cost * 3) {
+                const canAfford = corp.funds > cost * 3;
+                log(ns, `DEBUG: Unlock ${unlock.name} - cost: ${formatMoney(cost)}, funds: ${formatMoney(corp.funds)}, canAfford: ${canAfford}`, false, 'info');
+                if (canAfford) {
                     await cc(ns, 'ns.corporation.purchaseUnlock(ns.args[0])', [unlock.name]);
                     log(ns, `SUCCESS: Purchased ${unlock.name} (${formatMoney(cost)}) [Phase ${currentPhase}]`, false, 'success');
                     await asleep(ns, 2000);
@@ -207,7 +297,7 @@ async function resolveCrisis(ns, corp, crisis) {
                     [crisis.division, crisis.city]);
                 
                 if (corp.funds > upgradeCost * 1.5) {
-                    await cc(ns, 'ns.corporation.upgradeWarehouse(ns.args[0], ns.args[1])', 
+                    await cc(ns, 'ns.corporation.upgradeWarehouse(ns.args[0], ns.args[1], 1)', 
                         [crisis.division, crisis.city]);
                     log(ns, `SUCCESS: Crisis warehouse upgrade in ${crisis.division}/${crisis.city} (${crisis.usage}% → 100%+)`, false, 'warning');
                 }
@@ -238,14 +328,19 @@ async function manageOptimalBoostMaterials(ns, corp) {
                 const warehouse = await cc(ns, 'ns.corporation.getWarehouse(ns.args[0], ns.args[1])', [div.name, city]);
                 if (!warehouse) continue;
                 
+                // Early game: Skip boost buying for small warehouses (focus on production first)
+                if (warehouse.level < 3) {
+                    continue; // Skip boost buying until warehouse is level 3+
+                }
+                
                 // Chemical: Only buy boost materials if warehouse level is <= 1
                 if (isChemical && warehouse.level > 1) {
                     continue; // Skip boost buying for high-level Chemical warehouses
                 }
                 
                 // Calculate optimal boost material distribution
-                // Use 80% of warehouse space for boost materials (20% buffer for production)
-                const boostSpace = warehouse.size * 0.8;
+                // Use 50% of warehouse space for boost materials (50% buffer for production)
+                const boostSpace = warehouse.size * 0.5;
                 const optimal = calculateOptimalBoostMaterials(div.type, boostSpace);
                 
                 if (!optimal || !optimal.materials) continue;
@@ -262,8 +357,8 @@ async function manageOptimalBoostMaterials(ns, corp) {
                         const currentQty = material?.stored || 0;
                         const targetQty = data.quantity;
                         
-                        // Only buy if we need more
-                        if (targetQty > currentQty * 1.05) { // 5% tolerance
+                        // Only buy if we need significantly more (avoid tiny purchases)
+                        if (targetQty > currentQty * 1.2) { // 20% tolerance - only buy when 20% below target
                             // Calculate per-second purchase rate
                             const purchaseRate = calculateBoostPurchaseRate(targetQty, currentQty, 10);
                             
@@ -284,6 +379,102 @@ async function manageOptimalBoostMaterials(ns, corp) {
             } catch (e) {
                 // Silent fail for individual cities - continue with others
                 continue;
+            }
+        }
+    }
+}
+
+/**
+ * Set up exports between divisions to prevent Smart Supply from buying from market
+ * Agriculture needs Chemicals from Chemical division
+ * Chemical needs Plants from Agriculture division
+ * @param {NS} ns
+ * @param {Object} corp - Corporation data
+ */
+async function setupMaterialExports(ns, corp) {
+    const agriDiv = corp.divisions.find(d => d.type === 'Agriculture');
+    const chemDiv = corp.divisions.find(d => d.type === 'Chemical');
+    
+    if (!agriDiv || !chemDiv) return; // Need both divisions
+    
+    for (const city of agriDiv.cities) {
+        try {
+            // Check if Chemicals export from Chemical → Agriculture exists
+            const chemExports = await cc(ns, 'ns.corporation.getMaterial(ns.args[0], ns.args[1], ns.args[2])',
+                [chemDiv.name, city, 'Chemicals']);
+            
+            // Export Chemicals from Chemical to Agriculture
+            if (chemExports && !chemExports.exports?.some(e => e.division === agriDiv.name)) {
+                await cc(ns, 'ns.corporation.exportMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4], ns.args[5])',
+                    [chemDiv.name, city, agriDiv.name, city, 'Chemicals', 'MAX']);
+                log(ns, `INFO: Export setup: ${chemDiv.name} → ${agriDiv.name}: Chemicals (${city})`, false, 'info');
+            }
+            
+            // Export Plants from Agriculture to Chemical
+            const plantExports = await cc(ns, 'ns.corporation.getMaterial(ns.args[0], ns.args[1], ns.args[2])',
+                [agriDiv.name, city, 'Plants']);
+            
+            if (plantExports && !plantExports.exports?.some(e => e.division === chemDiv.name)) {
+                await cc(ns, 'ns.corporation.exportMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4], ns.args[5])',
+                    [agriDiv.name, city, chemDiv.name, city, 'Plants', 'MAX']);
+                log(ns, `INFO: Export setup: ${agriDiv.name} → ${chemDiv.name}: Plants (${city})`, false, 'info');
+            }
+        } catch (e) {
+            // Silent fail for individual cities
+        }
+    }
+}
+
+/**
+ * Sell produced materials (Agriculture/Chemical) in all cities
+ * Materials need to be sold via sellMaterial API
+ * @param {NS} ns
+ * @param {Object} corp - Corporation data
+ */
+async function manageMaterialSales(ns, corp) {
+    // First, ensure exports are set up between divisions
+    await setupMaterialExports(ns, corp);
+    
+    // Material-producing industries that need manual selling
+    const MATERIAL_INDUSTRIES = ['Agriculture', 'Chemical'];
+    
+    for (const div of corp.divisions) {
+        if (!MATERIAL_INDUSTRIES.includes(div.type)) continue;
+        
+        for (const city of div.cities) {
+            try {
+                // Get warehouse to see what materials are stored
+                const warehouse = await cc(ns, 'ns.corporation.getWarehouse(ns.args[0], ns.args[1])', [div.name, city]);
+                if (!warehouse || warehouse.size <= 0) continue;
+                
+                // Get materials this industry produces (API changed in v2.2.0)
+                // Note: getIndustryData needs IndustryType (e.g., "Agriculture"), not division name
+                const industryData = await cc(ns, 'ns.corporation.getIndustryData(ns.args[0])', [div.type]);
+                const materials = industryData?.producedMaterials || [];
+                
+                for (const materialName of materials) {
+                    try {
+                        const material = await cc(ns, 'ns.corporation.getMaterial(ns.args[0], ns.args[1], ns.args[2])', 
+                            [div.name, city, materialName]);
+                        
+                        // Debug logging to see material status
+                        if (material) {
+                            log(ns, `DEBUG: ${div.name}/${city}/${materialName}: stored=${material.stored?.toFixed(2) || 0}, prod=${material.productionAmount?.toFixed(2) || 0}, sell=${material.actualSellAmount?.toFixed(2) || 0}`, false, 'info');
+                        }
+                        
+                        // Sell material if we have any stored
+                        if (material && material.stored > 0) {
+                            log(ns, `INFO: Selling ${material.stored.toFixed(2)} ${materialName} from ${div.name}/${city} at MAX/MP`, false, 'info');
+                            await cc(ns, 'ns.corporation.sellMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4])',
+                                [div.name, city, materialName, 'MAX', 'MP']);
+                            log(ns, `SUCCESS: Listed ${materialName} for sale from ${div.name}/${city}`, false, 'success');
+                        }
+                    } catch (e) {
+                        log(ns, `WARN: Failed to sell ${materialName} from ${div.name}/${city}: ${e.message || e}`, false, 'warning');
+                    }
+                }
+            } catch (e) {
+                // Silent fail for cities without warehouses
             }
         }
     }

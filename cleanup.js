@@ -1,7 +1,25 @@
 /** @param {NS} ns **/
 export async function main(ns) {
+    // Check for corp lock file - if present, skip cleanup entirely
+    if (ns.fileExists('/Temp/corp-lock.txt')) {
+        ns.print(`INFO: Corp lock file present, skipping cleanup`);
+        return;
+    }
+    
+    // Check if corp scripts are running - skip cleanup to avoid breaking them
+    // Fix: Case-insensitive check for both 'corp-' and 'Corp/'
+    const corpRunning = ns.ps('home').some(p => 
+        p.filename.toLowerCase().includes('corp-') || 
+        p.filename.toLowerCase().includes('corp/')
+    );
+    if (corpRunning) {
+        ns.print(`INFO: Corp scripts running, skipping cleanup to avoid interference`);
+        return;
+    }
+    
     // Whitelist: Protect corporate communication and essential data
-    const PROTECTED_PREFIXES = ['corp-', 'permanent-', 'stock-'];
+    // ns-* protects API temp files (ns-corporation-*, ns-gang-*, etc.) used by getNsDataThroughFile
+    const PROTECTED_PREFIXES = ['corp-', 'permanent-', 'stock-', 'ns-'];
     const TEMP_DIR = 'Temp/';
     
     // Enhanced path safety validation to prevent directory traversal
@@ -78,8 +96,10 @@ export async function main(ns) {
                 continue;
             }
             
-            // Check if file is protected
-            if (PROTECTED_PREFIXES.some(prefix => filename.startsWith(prefix))) {
+            // Check if file is protected (handle both data files and .js script files)
+            // e.g., "ns-corporation-upgradeOfficeSize.txt" or "ns-corporation-upgradeOfficeSize.txt.js"
+            const baseName = filename.replace(/\.js$/, ''); // Remove .js extension for checking
+            if (PROTECTED_PREFIXES.some(prefix => filename.startsWith(prefix) || baseName.startsWith(prefix))) {
                 ns.print(`INFO: Protected file skipped: ${filename}`);
                 continue; 
             }

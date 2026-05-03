@@ -86,9 +86,9 @@ async function evaluateStockCondition(ns, corp, condition) {
                 };
                 
             case 'shares_owned':
-                const totalShares = corp.totalShares || 0;
-                const maxShares = corp.numShares || 0;
-                const ownedPercent = totalShares / maxShares;
+                const ownedShares = corp.numShares || 0;
+                const totalIssued = corp.issuedShares || 1;
+                const ownedPercent = ownedShares / totalIssued;
                 
                 return {
                     shouldTerminate: ownedPercent >= condition.value,
@@ -107,7 +107,7 @@ async function evaluateStockCondition(ns, corp, condition) {
                 };
                 
             case 'total_value':
-                const totalValue = corp.sharePrice * corp.totalShares;
+                const totalValue = corp.sharePrice * (corp.numShares || 0);
                 return {
                     shouldTerminate: totalValue >= condition.value,
                     reason: `Total share value high enough (${formatMoney(totalValue)} >= ${formatMoney(condition.value)})`
@@ -123,10 +123,10 @@ async function evaluateStockCondition(ns, corp, condition) {
 
 async function manageStocks(ns, corp) {
     try {
-        const totalStock = corp.totalShares || 0;
-        const maxStock = corp.numShares || 0;
-        const currentHolding = totalStock;
-        const maxHolding = maxStock * STOCK_CONFIG.maxHoldingPercent;
+        const ownedShares = corp.numShares || 0;
+        const totalIssued = corp.issuedShares || 1;
+        const currentHolding = ownedShares;
+        const maxHolding = totalIssued * STOCK_CONFIG.maxHoldingPercent;
         
         // Buy shares (if we have available funds)
         if (corp.funds > STOCK_CONFIG.buyThreshold && currentHolding < maxHolding) {
@@ -145,7 +145,7 @@ async function manageStocks(ns, corp) {
         // NOTE: API doesn't track cost basis (shareSalePrice), so profit-based selling is not possible.
         // This logic sells 20% of holdings when above 80% of max to free up capital.
         // May sell at a loss - monitor manually if share price drops significantly.
-        if (currentHolding > maxStock * 0.8) {
+        if (currentHolding > totalIssued * 0.8) {
             const toSell = Math.floor(currentHolding * 0.2); // Sell 20%
             
             if (toSell > 0) {

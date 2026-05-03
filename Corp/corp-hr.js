@@ -14,9 +14,9 @@ const CORP_CONFIG = {
 const HR_CONFIG = {
     teaInterval: 30000,      // Tea interval every 30s
     partyInterval: 60000,    // Party interval every 60s
-    hireThreshold: 1e12,    // Hire at 1T+ funds
-    expandThreshold: 5e12,  // Expand at 5T+ funds
-    targetOfficeSize: 30,    // Target office size
+    hireThreshold: 10e9,    // Hire at 10B+ funds (lowered for early game)
+    expandThreshold: 50e9,  // Expand at 50B+ funds
+    targetOfficeSize: 9,    // Target office size for early game (3-4 employees per city)
     moraleThreshold: 0.7,    // Minimum morale for actions
     adVertThreshold: 50e9,  // Minimum funds before hiring AdVert (50B)
     adVertFundsRatio: 0.05  // Spend up to 5% of funds on AdVert
@@ -38,7 +38,12 @@ const STAFF = {
 };
 
 async function cc(ns, cmd, args = []) { 
-    return await getNsDataThroughFile(ns, cmd, null, args); 
+    try {
+        return await getNsDataThroughFile(ns, cmd, null, args);
+    } catch (e) {
+        log(ns, `WARN: Command failed: ${cmd} - ${e.message || e}`, false, 'warning');
+        throw e;
+    }
 }
 
 export async function main(ns) {
@@ -146,7 +151,11 @@ async function manageMorale(ns, corp, now, lastTeaTime, lastPartyTime) {
 }
 
 async function manageHiring(ns, corp) {
-    if (corp.funds < HR_CONFIG.hireThreshold) return;
+    log(ns, `DEBUG: manageHiring called - funds: ${formatMoney(corp.funds)}, threshold: ${formatMoney(HR_CONFIG.hireThreshold)}`, false, 'info');
+    if (corp.funds < HR_CONFIG.hireThreshold) {
+        log(ns, `DEBUG: Funds below threshold, skipping hiring`, false, 'info');
+        return;
+    }
     
     // Fix Priority 3: Defensive iteration with null checks
     for (const div of corp.divisions) {
@@ -155,8 +164,10 @@ async function manageHiring(ns, corp) {
             continue;
         }
         
-        const targetStaff = getTargetStaff(div.name);
+        const targetStaff = getTargetStaff(div);
         const currentStaff = await calculateCurrentStaff(ns, div);
+        
+        let totalDivisionEmployees = 0;
         
         for (const city of div.cities) {
             try {
@@ -164,6 +175,7 @@ async function manageHiring(ns, corp) {
                 if (!office) continue;
                 
                 const currentEmployees = office.numEmployees ?? office.employees ?? 0;
+                totalDivisionEmployees += currentEmployees;
                 const targetEmployees = Object.values(targetStaff).reduce((a, b) => a + b, 0);
                 
                 if (currentEmployees < targetEmployees) {
@@ -180,9 +192,19 @@ async function manageHiring(ns, corp) {
                     }
                 }
                 
-                // Automatic role assignment
-                if (currentEmployees >= targetEmployees * 0.8) {
-                    await assignRoles(ns, div.name, city, targetStaff);
+                // Automatic role assignment - requires Office API unlock first
+                const hasOfficeAPI = await cc(ns, 'ns.corporation.hasUnlock("Office API")');
+                const threshold = Math.floor(targetEmployees * 0.1); // 10% of target (allows 2 employees)
+                
+                log(ns, `DEBUG: ${div.name}/${city} hasAPI=${hasOfficeAPI}, employees=${currentEmployees}, threshold=${threshold}`, false, 'info');
+                
+                if (hasOfficeAPI && currentEmployees >= threshold) {
+                    log(ns, `INFO: Assigning roles for ${div.name}/${city} (${currentEmployees} employees)`, false, 'info');
+                    await assignRoles(ns, div.name, city, targetStaff, currentEmployees);
+                } else if (!hasOfficeAPI) {
+                    log(ns, `INFO: Office API not unlocked - manual assignment needed for ${div.name}/${city}`, false, 'info');
+                } else {
+                    log(ns, `INFO: Not enough employees (${currentEmployees}/${threshold}) for auto-assignment in ${div.name}/${city}`, false, 'info');
                 }
                 
             } catch (e) {
@@ -190,6 +212,8 @@ async function manageHiring(ns, corp) {
                 log(ns, `ERROR in ${ns.getScriptName()} managing office ${div.name}/${city}: ${e.message || e}`, false, 'error');
             }
         }
+        
+        log(ns, `INFO: ${div.name} has ${totalDivisionEmployees} total employees across ${div.cities.length} cities`, false, 'info');
     }
 }
 
@@ -209,7 +233,7 @@ async function manageExpansion(ns, corp) {
                 if (!office) continue;
                 
                 if (office.size < HR_CONFIG.targetOfficeSize) {
-                    await cc(ns, 'ns.corporation.upgradeOfficeSize(ns.args[0], ns.args[1])', [div.name, city]);
+                    await cc(ns, 'ns.corporation.upgradeOfficeSize(ns.args[0], ns.args[1], ns.args[2])', [div.name, city, HR_CONFIG.targetOfficeSize]);
                     log(ns, `INFO: Expanding office ${div.name}/${city} to ${HR_CONFIG.targetOfficeSize} employees`, false, 'success');
                 }
             } catch (e) {
@@ -220,9 +244,11 @@ async function manageExpansion(ns, corp) {
     }
 }
 
-function getTargetStaff(divisionName) {
-    if (divisionName.includes('Agri')) return STAFF.agri;
-    if (divisionName.includes('Tobac')) return STAFF.tobacco;
+function getTargetStaff(div) {
+    // Use division type, not name (e.g., "Agriculture", not "GreenGrow")
+    const type = div?.type || div?.industry || '';
+    if (type === 'Agriculture') return STAFF.agri;
+    if (type === 'Tobacco') return STAFF.tobacco;
     return STAFF.tobacco_expanded; // Default for expanded
 }
 
@@ -243,15 +269,68 @@ async function calculateCurrentStaff(ns, division) {
     return total;
 }
 
-async function assignRoles(ns, division, city, targetStaff) {
+async function assignRoles(ns, division, city, targetStaff, totalEmployees) {
     try {
-        for (const [role, count] of Object.entries(targetStaff)) {
-            await cc(ns, 'ns.corporation.setAutoJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', 
-                [division, city, role, count]);
+        const targetTotal = Object.values(targetStaff).reduce((a,b)=>a+b,0);
+        let assignedCount = 0;
+        let employeesRemaining = totalEmployees;
+        
+        log(ns, `DEBUG: assignRoles called for ${division}/${city} with ${totalEmployees} employees, targetTotal=${targetTotal}`, false, 'info');
+        
+        // Sort roles by priority (highest target count first)
+        const sortedRoles = Object.entries(targetStaff).sort((a, b) => b[1] - a[1]);
+        log(ns, `DEBUG: Roles sorted: ${sortedRoles.map(r=>r[0]).join(', ')}`, false, 'info');
+        
+        // Check if all ideal counts would be 0 (happens when employees < number of roles)
+        const allZero = sortedRoles.every(([_, targetCount]) => {
+            const ratio = targetCount / targetTotal;
+            const ideal = Math.floor(totalEmployees * ratio);
+            log(ns, `DEBUG: ${targetCount}/${targetTotal}=${ratio.toFixed(2)}, floor(${totalEmployees}*${ratio.toFixed(2)})=${ideal}`, false, 'info');
+            return ideal === 0;
+        });
+        log(ns, `DEBUG: allZero=${allZero}`, false, 'info');
+        
+        for (const [role, targetCount] of sortedRoles) {
+            // Calculate scaled count
+            const ratio = targetCount / targetTotal;
+            const idealCount = Math.floor(totalEmployees * ratio);
+            
+            // If all ideal counts are 0, assign 1 to highest priority roles until employees run out
+            const scaledCount = allZero ? 
+                Math.min(1, employeesRemaining) : // Give 1 to each role in priority order
+                Math.min(idealCount, employeesRemaining);
+            
+            log(ns, `DEBUG: Role ${role}: ideal=${idealCount}, scaled=${scaledCount}, remaining=${employeesRemaining}`, false, 'info');
+            
+            // Stop if no employees left
+            if (scaledCount <= 0 || employeesRemaining <= 0) {
+                log(ns, `DEBUG: Breaking - scaledCount=${scaledCount}, employeesRemaining=${employeesRemaining}`, false, 'info');
+                break;
+            }
+            
+            try {
+                if (ns.corporation?.setJobAssignment) {
+                    await ns.corporation.setJobAssignment(division, city, role, scaledCount);
+                    employeesRemaining -= scaledCount;
+                    assignedCount++;
+                    log(ns, `INFO: Assigned ${scaledCount} to ${role} in ${division}/${city}`, false, 'info');
+                } else {
+                    log(ns, `WARN: setJobAssignment not available - cannot assign roles`, false, 'warning');
+                    break;
+                }
+            } catch (e) {
+                log(ns, `WARN: Failed to assign ${role} in ${division}/${city}: ${e.message || e}`, false, 'warning');
+            }
+        }
+        
+        // Log warning if employees remain unassigned
+        if (employeesRemaining > 0) {
+            log(ns, `WARN: ${employeesRemaining} employees unassigned in ${division}/${city} (insufficient for all roles)`, false, 'warning');
+        } else if (assignedCount > 0) {
+            log(ns, `SUCCESS: Assigned all ${totalEmployees} employees to ${assignedCount} roles in ${division}/${city}`, false, 'success');
         }
     } catch (e) {
-        // Fix Priority 1: Error logging instead of silent catch
-        log(ns, `ERROR in ${ns.getScriptName()} assigning roles for ${division}/${city}: ${e.message || e}`, false, 'error');
+        log(ns, `ERROR assigning roles for ${division}/${city}: ${e.message || e}`, false, 'error');
     }
 }
 
@@ -271,19 +350,21 @@ async function manageAdvertising(ns, corp) {
     for (const div of corp.divisions) {
         if (!div?.name) continue;
         
+        // Only do AdVert for Tobacco - Agriculture/Chemical don't benefit as much and may have API issues
+        if (div.type !== 'Tobacco') continue;
+        
         try {
             // Check current AdVert count
             const adVertCount = await cc(ns, 'ns.corporation.getHireAdVertCount(ns.args[0])', [div.name]);
             
-            // Get cost for next AdVert hire
-            const adVertCost = await cc(ns, 'ns.corporation.getHireAdVertCost(ns.args[0])', [div.name]);
-            
-            // Hire AdVert if affordable within budget and we haven't hit diminishing returns too hard
-            // Cap at reasonable number to avoid wasting money
-            if (adVertCost < maxAdSpend - totalSpent && adVertCount < 10) {
+            // Hire AdVert if we have budget and haven't hit diminishing returns too hard
+            // Cap at reasonable number to avoid wasting money (cost scales exponentially)
+            if (totalSpent < maxAdSpend && adVertCount < 10) {
                 await cc(ns, 'ns.corporation.hireAdVert(ns.args[0])', [div.name]);
-                totalSpent += adVertCost;
-                log(ns, `SUCCESS: Hired AdVert for ${div.name} (${formatMoney(adVertCost)}) - Count: ${adVertCount + 1}`, false, 'success');
+                // Estimate cost (scales roughly 2x per hire, starting ~100M)
+                const estimatedCost = 100e6 * Math.pow(2, adVertCount);
+                totalSpent += estimatedCost;
+                log(ns, `SUCCESS: Hired AdVert for ${div.name} (est. ${formatMoney(estimatedCost)}) - Count: ${adVertCount + 1}`, false, 'success');
                 await asleep(ns, 1000);
             }
         } catch (e) {

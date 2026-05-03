@@ -3,6 +3,7 @@ import { calculateOptimalDummyDivisions, calculateDummyDivisionOfferBoost, DUMMY
 
 const STATE_FILE = '/Temp/corp-state.txt';
 const PROTECT_FILE = '/Temp/corp-protection.txt';
+const LOCK_FILE = '/Temp/corp-lock.txt';  // Prevents cleanup.js from deleting temp files
 
 // Module configuration with intelligent self-termination
 const MODULES = {
@@ -58,10 +59,11 @@ const MODULES = {
     logistics: { 
         file: 'Corp/corp-logistics.js',  // Moved to Corp/ subdirectory
         ram: 2.5, 
-        priority: 2, 
-        phase: 2,
-        selfTerminate: false,         // Logistics runs continuously
-        completionConditions: []       // Never self-terminates
+        priority: 1, 
+        phase: 1,  // Phase 1: Need Office API for employee assignment ASAP
+        alwaysOn: true
+        // Logistics runs continuously
+        // completionConditions: []       // Never self-terminates
     }
 };
 
@@ -101,7 +103,14 @@ async function getAvailableRam(ns) {
 
 export async function main(ns) {
     disableLogs(ns, ['sleep', 'run', 'read', 'disableLog']);
-    ns.tail();
+    ns.ui.openTail();
+    
+    // Prevent multiple instances - only one manager should orchestrate
+    const runningInstances = ns.ps('home').filter(p => p.filename === 'corp-manager.js');
+    if (runningInstances.length > 1) {
+        log(ns, `Another instance already running (PID: ${runningInstances[0].pid}), exiting.`, false, 'warning');
+        return;
+    }
 
     log(ns, `Starting Enterprise Manager (RAM limit: ${MAX_RAM}GB)`, true, 'success');
     
@@ -215,7 +224,18 @@ export async function main(ns) {
                 fetcherRunning: ns.isRunning('corp-fetcher.js', 'home')
             };
             await ns.write(PROTECT_FILE, JSON.stringify(heartbeat), 'w');
+            
+            // Create lock file to prevent cleanup.js from deleting temp files
+            await ns.write(LOCK_FILE, 'corp-manager running', 'w');
 
+            // --- FETCH CORP DATA ---
+            const corp = await getCachedCorpData(ns);
+            if (!corp || !corp.divisions) {
+                log(ns, 'WARN: No corp data available yet, waiting...', false, 'warning');
+                await asleep(ns, 5000);
+                continue;
+            }
+            
             // --- PHASE ADVANCEMENT WITH RP THRESHOLDS ---
             // Check every 60 seconds if we can advance to next phase (per corp strategy guide)
             if (!state.lastPhaseCheck || Date.now() - state.lastPhaseCheck > 60000) {
@@ -507,13 +527,29 @@ async function ensureCoreDivisions(ns, corp) {
                 [industry, config.name]
             );
             
-            if (!success) {
-                log(ns, `WARNING: Failed to create ${industry} division - may already exist or insufficient funds`, false, 'warning');
+            // expandIndustry returns undefined on success, or throws on failure
+            // Check if division actually exists now
+            await asleep(ns, 1000); // Wait for game state to update
+            const verifyCorp = await getNsDataThroughFile(ns, 'ns.corporation.getCorporation()');
+            const divisionExists = verifyCorp?.divisions?.some(d => d.name === config.name || d.type === industry);
+            
+            if (!divisionExists) {
+                log(ns, `WARNING: Division creation may have failed - ${config.name} not found after creation`, false, 'warning');
                 continue;
             }
             
-            log(ns, `SUCCESS: ${industry} division "${config.name}" created!`, true, 'success');
+            log(ns, `SUCCESS: ${industry} division "${config.name}" created and verified!`, true, 'success');
             await asleep(ns, 2000);
+            
+            // Clear corp data cache to ensure next iteration sees the new division
+            // This prevents "division not found" errors in subsequent checks
+            try {
+                ns.rm(DEFAULT_CORP_DATA_PATH);
+                log(ns, `INFO: Cleared corp cache to refresh division data`, false, 'info');
+            } catch (e) {
+                // Cache might not exist, that's fine
+            }
+            await asleep(ns, 1000);
             
             // Expand to all cities
             for (const city of CITIES) {
@@ -533,12 +569,21 @@ async function ensureCoreDivisions(ns, corp) {
                         [config.name, city]
                     );
                     
-                    // Enable smart supply
-                    await getNsDataThroughFile(ns, 
-                        'ns.corporation.setSmartSupply(ns.args[0], ns.args[1], true)', 
-                        null, 
-                        [config.name, city]
-                    );
+                    // Enable smart supply ONLY if not Agriculture OR if Chemical division exists
+                    // Early-game Agriculture without Chemical will buy Chemicals from market - avoid this
+                    const isAgriculture = industry === 'Agriculture';
+                    const hasChemical = corp.divisions.some(d => d.type === 'Chemical');
+                    const shouldEnableSmartSupply = !isAgriculture || hasChemical;
+                    
+                    if (shouldEnableSmartSupply) {
+                        await getNsDataThroughFile(ns, 
+                            'ns.corporation.setSmartSupply(ns.args[0], ns.args[1], true)', 
+                            null, 
+                            [config.name, city]
+                        );
+                    } else {
+                        log(ns, `INFO: Smart Supply delayed for ${config.name}/${city} - waiting for Chemical division`, false, 'info');
+                    }
                     
                     log(ns, `SUCCESS: ${config.name} expanded to ${city} with warehouse`, false, 'success');
                     await asleep(ns, 1000);

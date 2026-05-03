@@ -8,7 +8,8 @@ const PRODUCT_CONFIG = {
     investmentPercent: 0.01,        // 1% of funds for investment (guide: exponent is only 0.1)
     developmentCheckInterval: 3000,  // Check every 3s
     sellDelay: 5000,              // 5s delay after completion
-    profitMargin: 0.7              // Minimum profit margin to continue
+    profitMargin: 0.7,             // Minimum profit margin to continue
+    productCounter: 0              // Counter to avoid name collisions
 };
 
 // Target cities for products
@@ -125,7 +126,7 @@ async function createNewProduct(ns, corp, divName, homeCity, products) {
     
     // Calculate investment
     const investment = calculateInvestment(corp.funds);
-    const productName = `Cig-v${Date.now() % 1000}`; // Unique number
+    const productName = `Cig-v${PRODUCT_CONFIG.productCounter++}`; // Unique counter
     
     try {
         await cc(ns, 'ns.corporation.makeProduct(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[3])', 
@@ -222,11 +223,11 @@ async function setupProductSales(ns, divName, productName) {
             
             // Activate Market-TA for better prices
             if (await cc(ns, 'ns.corporation.hasUnlock(ns.args[0])', ['Market-TA.I'])) {
-                await cc(ns, 'ns.corporation.setMarketTA1(ns.args[0], ns.args[1], true)', [divName, productName]);
+                await cc(ns, 'ns.corporation.setProductMarketTA1(ns.args[0], ns.args[1], true)', [divName, productName]);
             }
             
             if (await cc(ns, 'ns.corporation.hasUnlock(ns.args[0])', ['Market-TA.II'])) {
-                await cc(ns, 'ns.corporation.setMarketTA2(ns.args[0], ns.args[1], true)', [divName, productName]);
+                await cc(ns, 'ns.corporation.setProductMarketTA2(ns.args[0], ns.args[1], true)', [divName, productName]);
             }
             
         } catch (e) {
@@ -250,7 +251,7 @@ async function manageWarehouses(ns, divName, corp) {
                         [divName, city]);
                     
                     if (corp.funds > upgradeCost * 2) {
-                        await cc(ns, 'ns.corporation.upgradeWarehouse(ns.args[0], ns.args[1])', [divName, city]);
+                        await cc(ns, 'ns.corporation.upgradeWarehouse(ns.args[0], ns.args[1], 1)', [divName, city]);
                         log(ns, `SUCCESS: Warehouse upgrade ${city} (${(warehouse.sizeUsed/warehouse.size*100).toFixed(1)}% full)`, false, 'info');
                     }
                 }

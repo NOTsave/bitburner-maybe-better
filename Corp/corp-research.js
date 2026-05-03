@@ -14,6 +14,12 @@ const RESEARCH_PRIORITY = [
     { name: 'Go-Juice', cost: 25000, priority: 5, divisions: ['Tobacco', 'Agriculture'] },
     { name: 'CPH4 Injections', cost: 25000, priority: 6, divisions: ['Tobacco', 'Agriculture'] },
     
+    // --- Automation (reduces manual HR work) - low priority ---
+    { name: 'AutoBrew', cost: 3000, priority: 13, divisions: ['Tobacco', 'Agriculture'] },           // Auto tea for all offices
+    { name: 'AutoPartyManager', cost: 15000, priority: 14, divisions: ['Tobacco', 'Agriculture'] },   // Auto party for all offices
+    { name: 'HRBuddy-Recruitment', cost: 8000, priority: 15, divisions: ['Tobacco', 'Agriculture'] }, // Auto-hire employees
+    { name: 'HRBuddy-Training', cost: 5000, priority: 16, divisions: ['Tobacco', 'Agriculture'] },    // Auto-training
+    
     // --- Market-TA (only if no custom script) - low priority ---
     { name: 'Market-TA.I', cost: 20000, priority: 10, divisions: ['Tobacco'] },
     { name: 'Market-TA.II', cost: 50000, priority: 11, divisions: ['Tobacco'] },
@@ -26,8 +32,7 @@ const RESEARCH_PRIORITY = [
     
     // --- Optional/late-game ---
     { name: 'uPgrade: Fulcrum', cost: 10000, priority: 12, divisions: ['Tobacco'] },
-    { name: 'uBiome', cost: 1e12, priority: 99, divisions: ['Tobacco'] }, // Very expensive, late-game only
-    { name: 'DreamSense', cost: 200e9, priority: 99, divisions: ['Agriculture'] } // Uses fund cost
+    { name: 'uBiome', cost: 100000, priority: 99, divisions: ['Tobacco'] } // Very expensive, late-game only (100k RP)
 ];
 
 // Research module configuration with self-termination
@@ -50,7 +55,8 @@ async function cc(ns, cmd, args = []) {
 }
 
 export async function main(ns) {
-    log(ns, `🔬 Starting Research Manager (self-termination: ${RESEARCH_CONFIG.selfTerminate ? 'ENABLED' : 'DISABLED'})`, false, 'info');
+    const ramUsed = ns.getScriptRam(ns.getScriptName());
+    log(ns, `🔬 Starting Research Manager (RAM: ${ramUsed.toFixed(2)}GB, self-termination: ${RESEARCH_CONFIG.selfTerminate ? 'ENABLED' : 'DISABLED'})`, false, 'info');
     
     let lastResearchTime = 0;
     
@@ -91,7 +97,7 @@ async function checkSelfTerminationConditions(ns, corp) {
     try {
         for (const condition of RESEARCH_CONFIG.completionConditions) {
             const result = await evaluateResearchCondition(ns, corp, condition);
-            if (result.shouldTerminate) {
+            if (result.terminate) {
                 log(ns, `Research complete: ${result.reason}`, false, 'success');
                 return true;
             }

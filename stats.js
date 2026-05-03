@@ -276,7 +276,7 @@ async function getHudData(ns, bitNode, dictSourceFiles, options) {
             if (corpInfo) {
                 // Display corporation funds
                 val1.push(true, formatMoney(corpInfo.funds), 
-                    `Corporate Funds available for investment.\nName: ${corpInfo.name} | Tax: ${formatMoney(corpInfo.taxStats.lastTaxPayment)}`);
+                    `Corporate Funds available for investment.\nName: ${corpInfo.name} | Tax: ${corpInfo.taxStats ? formatMoney(corpInfo.taxStats.lastTaxPayment) : 'N/A'}`);
                 
                 // Display net revenue (revenue - expenses)
                 const revenue = corpInfo.revenue - corpInfo.expenses;
