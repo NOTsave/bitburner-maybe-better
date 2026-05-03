@@ -202,7 +202,7 @@ async function manageHiring(ns, corp) {
                     log(ns, `INFO: Assigning roles for ${div.name}/${city} (${currentEmployees} employees)`, false, 'info');
                     await assignRoles(ns, div.name, city, targetStaff, currentEmployees);
                 } else if (!hasOfficeAPI) {
-                    log(ns, `INFO: Office API not unlocked - manual assignment needed for ${div.name}/${city}`, false, 'info');
+                    log(ns, `WARN: Skipping role assignment - Office API not unlocked for ${div.name}/${city}`, false, 'warning');
                 } else {
                     log(ns, `INFO: Not enough employees (${currentEmployees}/${threshold}) for auto-assignment in ${div.name}/${city}`, false, 'info');
                 }
@@ -309,15 +309,20 @@ async function assignRoles(ns, division, city, targetStaff, totalEmployees) {
             }
             
             try {
-                if (ns.corporation?.setJobAssignment) {
-                    await ns.corporation.setJobAssignment(division, city, role, scaledCount);
-                    employeesRemaining -= scaledCount;
-                    assignedCount++;
-                    log(ns, `INFO: Assigned ${scaledCount} to ${role} in ${division}/${city}`, false, 'info');
-                } else {
-                    log(ns, `WARN: setJobAssignment not available - cannot assign roles`, false, 'warning');
+                // Validate Office API availability before attempting role assignment
+                const hasOfficeAPI = await cc(ns, 'ns.corporation.hasUnlock("Office API")');
+                if (!hasOfficeAPI) {
+                    log(ns, `WARN: Office API not unlocked - cannot assign roles in ${division}/${city}`, false, 'warning');
                     break;
                 }
+                
+                // v3.x: setAutoJobAssignment() removed, use setJobAssignment() with Office API check
+                // API requires ns.args for ram-dodging parameter passing
+                await cc(ns, 'ns.corporation.setJobAssignment(ns.args[0], ns.args[1], ns.args[2], ns.args[3])', 
+                    [division, city, role, scaledCount]);
+                employeesRemaining -= scaledCount;
+                assignedCount++;
+                log(ns, `INFO: Assigned ${scaledCount} to ${role} in ${division}/${city}`, false, 'info');
             } catch (e) {
                 log(ns, `WARN: Failed to assign ${role} in ${division}/${city}: ${e.message || e}`, false, 'warning');
             }
@@ -349,6 +354,12 @@ async function manageAdvertising(ns, corp) {
     
     for (const div of corp.divisions) {
         if (!div?.name) continue;
+        
+        // Defensive check for division type before accessing
+        if (!div.type) {
+            log(ns, `WARN: Division ${div.name} missing type property, skipping AdVert`, false, 'warning');
+            continue;
+        }
         
         // Only do AdVert for Tobacco - Agriculture/Chemical don't benefit as much and may have API issues
         if (div.type !== 'Tobacco') continue;

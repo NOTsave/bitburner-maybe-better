@@ -748,7 +748,13 @@ async function getCurrentFactionFavour(ns, factionName) {
 
 /** @param {NS} ns */
 async function getServerRequiredHackLevel(ns, serverName) {
-    return await getNsDataThroughFile(ns, `ns.getServerRequiredHackingLevel(ns.args[0])`, null, [serverName]);
+    try {
+        return await getNsDataThroughFile(ns, `ns.getServerRequiredHackingLevel(ns.args[0])`, null, [serverName]);
+    } catch (e) {
+        // v3.x: Non-hackable servers now throw errors instead of returning Infinity
+        // Return Infinity for non-hackable servers (hacknet, darkweb, etc.)
+        return Infinity;
+    }
 }
 
 /** A special check for when we unlock donations with Daedalus, this is usually a good time to reset.

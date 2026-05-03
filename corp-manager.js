@@ -71,6 +71,11 @@ const MODULES = {
 const MAX_RAM = 15;
 const RESERVED_RAM = 2; // Reserve for system and manager
 
+// Cache for dynamic RAM calculations
+let moduleRamCache = {};
+let moduleRamCacheTime = {};
+const MODULE_RAM_CACHE_DURATION = 60000; // Cache for 60 seconds
+
 // Dynamic RAM calculation with race condition protection
 async function getAvailableRam(ns) {
     const host = "home";
@@ -83,7 +88,7 @@ async function getAvailableRam(ns) {
             const usedRam = ns.getServerUsedRam(host);
             const available = maxRam - usedRam;
             
-            // Validate the result is reasonable
+            // Validate result is reasonable
             if (available >= 0 && available <= maxRam) {
                 return available;
             }
@@ -92,13 +97,34 @@ async function getAvailableRam(ns) {
         }
         
         attempts++;
-        if (attempts < maxAttempts) {
-            await ns.sleep(100); // Brief pause between attempts
-        }
+        await ns.sleep(100); // Brief pause between attempts
     }
     
     // Fallback to conservative estimate
     return Math.max(0, (ns.getServerMaxRam(host) || 0) - (ns.getServerUsedRam(host) || 0));
+}
+
+// Get dynamic RAM cost for a module with caching
+async function getModuleRamCost(ns, moduleFile) {
+    const now = Date.now();
+    
+    // Return cached value if still valid
+    if (moduleRamCache[moduleFile] && moduleRamCacheTime[moduleFile] && 
+        (now - moduleRamCacheTime[moduleFile]) < MODULE_RAM_CACHE_DURATION) {
+        return moduleRamCache[moduleFile];
+    }
+    
+    try {
+        const ramCost = ns.getScriptRam(moduleFile);
+        moduleRamCache[moduleFile] = ramCost;
+        moduleRamCacheTime[moduleFile] = now;
+        return ramCost;
+    } catch (e) {
+        log(ns, `WARN: Failed to get RAM cost for ${moduleFile}: ${e.message || e}`, false, 'warning');
+        // Return fallback value from MODULES if available
+        const fallbackModule = Object.values(MODULES).find(m => m.file === moduleFile);
+        return fallbackModule?.ram || 2.5; // Conservative fallback
+    }
 }
 
 export async function main(ns) {
@@ -186,8 +212,8 @@ export async function main(ns) {
             const emergencyModules = ['Corp/corp-products.js', 'Corp/corp-research.js'];
             for (const modName of emergencyModules) {
                 if (ns.isRunning(modName, 'home')) continue;
-                const config = Object.values(MODULES).find(m => m.file === modName);
-                if (config && currentAvailableRAM >= config.ram) {
+                const dynamicRamCost = await getModuleRamCost(ns, modName);
+                if (currentAvailableRAM >= dynamicRamCost) {
                     const pid = await ns.run(modName, 1);
                     if (pid === 0) {
                         log(ns, `ERROR: Emergency start failed for ${modName} - insufficient RAM or script not found`, false, 'error');
@@ -195,7 +221,7 @@ export async function main(ns) {
                         log(ns, `WARNING: Emergency start: ${modName} (PID: ${pid})`, true, 'warning');
                     }
                 } else {
-                    log(ns, `INFO: Skipping ${modName} - insufficient RAM (${config?.ram || '?'}GB needed, ${currentAvailableRAM.toFixed(1)}GB available)`, false, 'info');
+                    log(ns, `INFO: Skipping ${modName} - insufficient RAM (${dynamicRamCost.toFixed(1)}GB needed, ${currentAvailableRAM.toFixed(1)}GB available)`, false, 'info');
                 }
             }
         } catch (e) {
@@ -277,13 +303,16 @@ async function manageModulesWithSelfTermination(ns, state) {
         const shouldRun = shouldModuleRun(ns, name, config, state, availableRAM);
         const isRunning = ns.isRunning(config.file, 'home');
         
+        // Get dynamic RAM cost instead of hardcoded value
+        const dynamicRamCost = await getModuleRamCost(ns, config.file);
+        
         if (shouldRun && !isRunning) {
-            if (availableRAM >= config.ram) {
-                log(ns, `INFO: Starting module: ${name} (${config.ram}GB RAM)`, false, 'info');
+            if (availableRAM >= dynamicRamCost) {
+                log(ns, `INFO: Starting module: ${name} (${dynamicRamCost.toFixed(1)}GB RAM)`, false, 'info');
                 await ns.run(config.file, 1);
                 await ns.sleep(1000); // Allow time to start
             } else {
-                log(ns, `WARNING: Insufficient RAM for ${name} (${config.ram}GB needed, ${availableRAM.toFixed(1)}GB available)`, false, 'warning');
+                log(ns, `WARNING: Insufficient RAM for ${name} (${dynamicRamCost.toFixed(1)}GB needed, ${availableRAM.toFixed(1)}GB available)`, false, 'warning');
             }
         } else if (!shouldRun && isRunning && !config.alwaysOn) {
             log(ns, `INFO: Intelligently stopping module: ${name}`, false, 'info');
@@ -460,9 +489,10 @@ const CITIES = ['Sector-12', 'Aevum', 'Chongqing', 'New Tokyo', 'Ishima', 'Volha
 
 // RP thresholds per corp strategy guide
 const RP_THRESHOLDS = {
-    1: { Agriculture: 55, Chemical: 0 },        // Round 1: Agri 55 RP before production
-    2: { Agriculture: 700, Chemical: 390 },       // Round 2: Agri 700, Chem 390 RP
-    3: { Agriculture: 1000, Chemical: 500 }       // Round 3+: Minimum RP stockpile
+    1: { Agriculture: 55, Chemical: 0 },                    // Round 1: Agri 55 RP before production
+    2: { Agriculture: 700, Chemical: 390 },               // Round 2: Agri 700, Chem 390 RP
+    3: { Agriculture: 1000, Chemical: 500, Tobacco: 200 }, // Round 3+: Add Tobacco research
+    4: { Agriculture: 1500, Chemical: 800, Tobacco: 500 }  // Round 4: Advanced research targets
 };
 
 /** Check if we have enough RP to advance to next phase

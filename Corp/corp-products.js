@@ -129,7 +129,7 @@ async function createNewProduct(ns, corp, divName, homeCity, products) {
     const productName = `Cig-v${PRODUCT_CONFIG.productCounter++}`; // Unique counter
     
     try {
-        await cc(ns, 'ns.corporation.makeProduct(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[3])', 
+        await cc(ns, 'ns.corporation.makeProduct(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4])', 
             [divName, homeCity, productName, investment, investment]);
         
         log(ns, `🚀 Developing ${productName} (Investment: ${formatMoney(investment)} - ${(investment/corp.funds*100).toFixed(1)}%)`, false, 'success');

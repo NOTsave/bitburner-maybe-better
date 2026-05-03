@@ -50,20 +50,108 @@ export function sysLog(ns, msg, type = 'info') {
     log(ns, `${prefix} ${msg}`, false, type);
 }
 
+// Centralized Faction Data - Single source of truth for all faction-related operations
+export const FACTION_DATA = {
+    // All factions in the game (complete master list)
+    ALL_FACTIONS: [
+        "Illuminati", "Daedalus", "The Covenant", "ECorp", "MegaCorp", "Bachman & Associates", "Blade Industries", 
+        "NWO", "Clarke Incorporated", "OmniTek Incorporated", "Four Sigma", "KuaiGong International", 
+        "Fulcrum Secret Technologies", "BitRunners", "The Black Hand", "NiteSec", "Aevum", "Chongqing", 
+        "Ishima", "New Tokyo", "Sector-12", "Volhaven", "Speakers for the Dead", "The Dark Army", 
+        "The Syndicate", "Silhouette", "Tetrads", "Slum Snakes", "Netburners", "Tian Di Hui", 
+        "CyberSec", "Bladeburners", "Church of the Machine God", "Shadows of Anarchy"
+    ],
+    
+    // Factions that cannot receive reputation donations
+    NO_DONATION_FACTIONS: ["Bladeburners", "Church of the Machine God", "Shadows of Anarchy"],
+    
+    // Factions that cannot be worked for directly
+    CANNOT_WORK_FOR: ["Church of the Machine God", "Bladeburners", "Shadows of Anarchy"],
+    
+    // Easy access factions (always shown even with --hide-locked-factions)
+    EASY_ACCESS: [
+        "Tian Di Hui", "Sector-12", "Chongqing", "New Tokyo", "Ishima", "Aevum", "Volhaven", // Location-Based
+        "BitRunners", "CyberSec", "NiteSec", "Netburners", "Slum Snakes", "Tetrads" // Early Crime
+    ],
+    
+    // Potential gang factions (joined when nearing -54K Karma)
+    POTENTIAL_GANG_FACTIONS: ["Slum Snakes", "Tetrads", "The Black Hand", "The Syndicate", "The Dark Army", "Speakers for the Dead"],
+    
+    // Preferred early faction order (priority sequence)
+    PREFERRED_EARLY_ORDER: [
+        "Netburners", // Improve hash income
+        "Tian Di Hui", "Aevum", // Company/faction rep bonuses early game
+        "Daedalus", // Red Pill target
+        "CyberSec", "NiteSec", // Easy hacking factions
+        "BitRunners", // Good augments
+        "The Black Hand", // Good combat augs
+        "Tetrads", "Slum Snakes", // Crime factions
+        "Speakers for the Dead", "The Dark Army", // Gang factions
+        "The Syndicate", "The Covenant", // Late-game factions
+        "ECorp", "MegaCorp", "Bachman & Associates", // Company factions
+        "Clarke Incorporated", "OmniTek Incorporated", "Four Sigma", "KuaiGong International", // More companies
+        "Fulcrum Secret Technologies", "Blade Industries", "NWO" // Endgame factions
+    ],
+    
+    // Preferred company faction order (for rep grinding)
+    PREFERRED_COMPANY_ORDER: [
+        "Bachman & Associates", // Company rep boost
+        "ECorp", // Major hacking boosts
+        "Clarke Incorporated", // Hacking boost
+        "OmniTek Incorporated", // Good balance
+        "Fulcrum Secret Technologies", // Late-game company
+        "Blade Industries", "NWO", "Four Sigma", "KuaiGong International" // More companies
+    ],
+    
+    // Preferred crime faction order
+    PREFERRED_CRIME_ORDER: ["Slum Snakes", "Tetrads", "Speakers for the Dead", "The Syndicate", "The Dark Army", "The Covenant", "Daedalus", "Netburners", "NiteSec", "The Black Hand"],
+    
+    // All gang factions
+    ALL_GANG_FACTIONS: ["Speakers for the Dead", "The Dark Army", "The Syndicate", "Tetrads", "Slum Snakes", "The Black Hand", "NiteSec"],
+    
+    // Default desired augmentations (always marked as desired)
+    DEFAULT_DESIRED_AUGS: ["The Red Pill", "The Blade's Simulacrum", "Neuroreceptor Management Implant", "CashRoot Starter Kit"],
+    
+    // Default hidden stats (not shown in summary)
+    DEFAULT_HIDDEN_STATS: ['bladeburner', 'hacknet']
+};
+
 /**
- * Return a number formatted with the specified number of significant figures or decimal places, whichever is more limiting.
+ * Return a number formatted with specified number of significant figures or decimal places, whichever is more limiting.
+ * Uses ns.formatNumber when available (v3.x), falls back to custom implementation for v2.x compatibility
+ * @param {NS} ns - Netscript instance for API access
  * @param {number} num - The number to format
- * @param {number=} minSignificantFigures - (default: 6) The minimum significant figures you wish to see (e.g. 123, 12.3 and 1.23 all have 3 significant figures)
+ * @param {number=} minSignificantFigures - (default: 6) The minimum significant figures you wish to see (e.g. 123, 12.3 and1.23 all have 3 significant figures)
  * @param {number=} minDecimalPlaces - (default: 3) The minimum decimal places you wish to see, regardless of significant figures. (e.g. 12.3, 1.2, 0.1 all have 1 decimal)
  **/
-export function formatNumber(num, minSignificantFigures = 3, minDecimalPlaces = 1) {
+export function formatNumber(ns, num, minSignificantFigures = 3, minDecimalPlaces = 1) {
+    // Try to use ns.format.number (v3.x API) first
+    if (ns && ns.format && typeof ns.format.number === 'function') {
+        try {
+            return ns.format.number(num, minSignificantFigures, minDecimalPlaces);
+        } catch (e) {
+            // Fall back to custom implementation if ns.format.number fails
+        }
+    }
+    
+    // Fallback implementation for v2.x compatibility
     return num == 0.0 ? "0" : num.toFixed(Math.max(minDecimalPlaces, Math.max(0, minSignificantFigures - Math.ceil(Math.log10(num)))));
 }
 
 const memorySuffixes = ["GB", "TB", "PB", "EB"];
 
 /** Formats some RAM amount as a round number of GB/TB/PB/EB with thousands separators e.g. `1.028 TB` */
-export function formatRam(num, printGB) {
+export function formatRam(ns, num, printGB) {
+    // Try to use ns.format.ram (v3.x API) first
+    if (ns && ns.format && typeof ns.format.ram === 'function') {
+        try {
+            return ns.format.ram(num);
+        } catch (e) {
+            // Fall back to custom implementation if ns.format.ram fails
+        }
+    }
+    
+    // Fallback implementation for v2.x compatibility
     if (printGB) {
         return `${Math.round(num).toLocaleString('en')} GB`;
     }
@@ -75,8 +163,48 @@ export function formatRam(num, printGB) {
     }
     const scaled = num / 1000 ** idx; // Scale the number to the order of magnitude chosen
     // Only display decimal places if there are any
-    const formatted = scaled - Math.round(scaled) == 0 ? Math.round(scaled) : formatNumber(num / 1000 ** idx);
+    const formatted = scaled - Math.round(scaled) == 0 ? Math.round(scaled) : formatNumber(ns, num / 1000 ** idx);
     return formatted.toLocaleString('en') + " " + memorySuffixes[idx];
+}
+
+/** Formats a number as a percentage with specified precision
+ * Uses ns.formatPercent when available (v3.x), falls back to custom implementation for v2.x compatibility
+ * @param {NS} ns - Netscript instance for API access
+ * @param {number} num - The number to format as percentage
+ * @param {number=} decimalPlaces - (default: 1) Number of decimal places
+ **/
+export function formatPercent(ns, num, decimalPlaces = 1) {
+    // Try to use ns.format.percent (v3.x API) first
+    if (ns && ns.format && typeof ns.format.percent === 'function') {
+        try {
+            return ns.format.percent(num, decimalPlaces);
+        } catch (e) {
+            // Fall back to custom implementation if ns.format.percent fails
+        }
+    }
+    
+    // Fallback implementation for v2.x compatibility
+    return `${(num * 100).toFixed(decimalPlaces)}%`;
+}
+
+/** Formats time duration using ns.format API
+ * Uses ns.formatTime when available (v3.x), falls back to custom implementation for v2.x compatibility
+ * @param {NS} ns - Netscript instance for API access
+ * @param {number} milliseconds - Time in milliseconds to format
+ * @param {number=} milliPrecision - (default: 0) Millisecond precision
+ **/
+export function tFormat(ns, milliseconds, milliPrecision = 0) {
+    // Try to use ns.formatTime (v3.x API) first
+    if (ns && typeof ns.formatTime === 'function') {
+        try {
+            return ns.formatTime(milliseconds, milliPrecision);
+        } catch (e) {
+            // Fall back to custom implementation if ns.formatTime fails
+        }
+    }
+    
+    // Fallback implementation for v2.x compatibility
+    return formatDuration(milliseconds);
 }
 
 /** Return a datatime in ISO format */
@@ -194,7 +322,11 @@ function checkBackwardsCompatibility(ns, command) {
         .replaceAll("cloud.deleteServer", "deleteServer")
         .replaceAll("cloud.getServerNames", "getPurchasedServers")
         .replaceAll("cloud.getServerLimit", "getPurchasedServerLimit")
-        .replaceAll("cloud.getRamLimit", "getPurchasedServerMaxRam");
+        .replaceAll("cloud.getRamLimit", "getPurchasedServerMaxRam")
+        // Post-Steam update Corporation API changes
+        .replaceAll("ns.corporation.setJobAssignment", "ns.corporation.assignJob")  // setJobAssignment renamed
+        .replaceAll("ns.corporation.expandIndustry", "ns.corporation.expandIndustry") // Check signature changes
+        .replaceAll("ns.corporation.getCorporation()", "ns.corporation.getCorporation()"); // Handle field changes
 
     // Log altered commands to assist with troubleshooting.
     if (alteredCommand != command)
@@ -979,10 +1111,28 @@ function isV3(ns) {
 }
 
 export function formatTime(ns, milliseconds, milliPrecision) {
+    // v3.x: ns.format.time() replaces ns.tFormat()
     if (isV3(ns)) {
-        return ns.ui.time(milliseconds, milliPrecision);
+        return ns.format?.time(milliseconds, milliPrecision) ?? ns.ui.time(milliseconds, milliPrecision);
     }
-    return ns.tFormat(milliseconds, milliPrecision);
+    return ns.tFormat?.(milliseconds, milliPrecision) ?? ns.ui.time(milliseconds, milliPrecision);
+}
+
+/** Format a number using ns.format (v3.x) or string formatting (v2.x fallback)
+ * @param {NS} ns
+ * @param {number} num - The number to format
+ * @param {string} [formatType='number'] - 'number', 'ram', or 'percent'
+ * @returns {string} */
+export function formatWithNs(ns, num, formatType = 'number') {
+    if (isV3(ns) && ns.format) {
+        switch (formatType) {
+            case 'ram': return ns.format.ram(num);
+            case 'percent': return ns.format.percent(num);
+            default: return ns.format.number(num);
+        }
+    }
+    // v2.x fallback
+    return String(num);
 }
 
 /** @param {NS} ns 

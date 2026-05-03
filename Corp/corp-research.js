@@ -185,7 +185,7 @@ async function manageResearch(ns, corp) {
             if (availableRP >= targetResearch.cost + RESEARCH_CONFIG.minRPBuffer) {
                 
                 await cc(ns, 'ns.corporation.research(ns.args[0], ns.args[1])', [div.name, targetResearch.name]);
-                log(ns, `🔬 ${div.name}: ${targetResearch.name} (${formatMoney(targetResearch.cost)})`, false, 'success');
+                log(ns, `🔬 ${div.name}: ${targetResearch.name} (${targetResearch.cost.toLocaleString()} RP)`, false, 'success');
                 
                 // Small pause for processing
                 await asleep(ns, 1000);

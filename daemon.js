@@ -1057,9 +1057,14 @@ export async function main(ns) {
     let actualWeakenPotency = () => bitNodeMults.ServerWeakenRate * weakenThreadPotency;
 
     // Get a dictionary from retrieving the same infromation for every server name
+    // v3.x: Non-hackable servers (hacknet, darkweb) now throw errors. Use fallback values.
+    async function getServersDictSafe(ns, command, fallback = null) {
+        return await getNsDataThroughFile(ns, 
+            `Object.fromEntries(ns.args.map(server => { try { return [server, ns.${command}(server)]; } catch { return [server, ns.args[1]]; } }))`,
+            `/Temp/${command}-all.txt`, [allHostNames, fallback]);
+    }
     async function getServersDict(ns, command) {
-        return await getNsDataThroughFile(ns, `Object.fromEntries(ns.args.map(server => [server, ns.${command}(server)]))`,
-            `/Temp/${command}-all.txt`, allHostNames);
+        return await getServersDictSafe(ns, command);
     }
 
     let dictInitialServerInfos = (/**@returns{{[serverName: string]: globalThis.Server;}}*/() => undefined)();
@@ -1076,12 +1081,12 @@ export async function main(ns) {
      * @param {NS} ns */
     async function getStaticServerData(ns) {
         if (verbose) log(ns, `getStaticServerData: ${allHostNames}`);
-        dictServerRequiredHackinglevels = await getServersDict(ns, 'getServerRequiredHackingLevel');
-        dictServerNumPortsRequired = await getServersDict(ns, 'getServerNumPortsRequired');
-        dictServerGrowths = await getServersDict(ns, 'getServerGrowth');
+        dictServerRequiredHackinglevels = await getServersDictSafe(ns, 'getServerRequiredHackingLevel', Infinity);
+        dictServerNumPortsRequired = await getServersDictSafe(ns, 'getServerNumPortsRequired', Infinity);
+        dictServerGrowths = await getServersDictSafe(ns, 'getServerGrowth', 0);
         // The "GetServer" object result is used with the formulas API (due to type checking that the parameter is a valid "server" instance)
         // TODO: There is now a "ns.formulas.mockServer()" function that we can switch to
-        dictInitialServerInfos = await getServersDict(ns, 'getServer');
+        dictInitialServerInfos = await getServersDictSafe(ns, 'getServer', null);
         // Also immediately retrieve the data which is occasionally updated
         await updateCachedServerData(ns);
         await refreshDynamicServerData(ns);
@@ -1091,7 +1096,7 @@ export async function main(ns) {
      * @param {NS} ns */
     async function updateCachedServerData(ns) {
         //if (verbose) log(ns, `updateCachedServerData`);
-        dictServerMaxRam = await getServersDict(ns, 'getServerMaxRam');
+        dictServerMaxRam = await getServersDictSafe(ns, 'getServerMaxRam', 0);
     }
 
     /** Refresh data that might change rarely over time, but for which having precice up-to-the-minute information isn't critical.
@@ -1099,8 +1104,8 @@ export async function main(ns) {
     async function refreshDynamicServerData(ns) {
         if (verbose) log(ns, `refreshDynamicServerData: ${allHostNames}`);
         // Min Security / Max Money can be affected by Hashnet purchases, so we should update this occasionally
-        dictServerMinSecurityLevels = await getServersDict(ns, 'getServerMinSecurityLevel');
-        dictServerMaxMoney = await getServersDict(ns, 'getServerMaxMoney');
+        dictServerMinSecurityLevels = await getServersDictSafe(ns, 'getServerMinSecurityLevel', 100);
+        dictServerMaxMoney = await getServersDictSafe(ns, 'getServerMaxMoney', 0);
         // Get the information about the relative profitability of each server (affects targetting order)
         const pid = await exec(ns, getFilePath('analyze-hack.js'), null, null, '--all', '--silent');
         await waitForProcessToComplete_Custom(ns, getHomeProcIsAlive(ns), pid);
@@ -1308,13 +1313,26 @@ export async function main(ns) {
         timeToHack() { return this.ns.getHackTime(this.name); }
     }
 
+    // Cache for network stats to reduce execution overhead
+    let networkStatsCache = null;
+    let networkStatsCacheTime = 0;
+    const NETWORK_STATS_CACHE_DURATION = 2000; // Cache for 2 seconds
+
     // Helpers to get slices of info / cumulative stats across all rooted servers
     function getNetworkStats() {
+        const now = Date.now();
+        
+        // Return cached stats if still valid
+        if (networkStatsCache && (now - networkStatsCacheTime) < NETWORK_STATS_CACHE_DURATION) {
+            return networkStatsCache;
+        }
+        
         const rootedServers = getAllServers().filter(server => server.hasRoot());
         const listOfServersFreeRam = rootedServers.map(s => s.ramAvailable()).filter(ram => ram > 1.6); // Servers that can't run a script don't count
         const totalMaxRam = rootedServers.map(s => s.totalRam()).reduce((a, b) => a + b, 0);
         const totalFreeRam = Math.max(0, listOfServersFreeRam.reduce((a, b) => a + b, 0)); // Hack, free ram can be negative due to "pretending" reserved home ram doesn't exist. Clip to 0
-        return {
+        
+        networkStatsCache = {
             listOfServersFreeRam: listOfServersFreeRam,
             totalMaxRam: totalMaxRam,
             totalFreeRam: totalFreeRam,
@@ -1322,6 +1340,9 @@ export async function main(ns) {
             // The money we could make if we took 100% from every currently hackable server, to help us guage how relatively profitable each server is
             //totalMaxMoney: rootedServers.filter(s => s.canHack() && s.shouldHack()).map(s => s.getMaxMoney()).reduce((a, b) => a + b, 0)
         };
+        networkStatsCacheTime = now;
+        
+        return networkStatsCache;
     }
     // Simpler function to get current total percentage of ram used across the network
     function getTotalNetworkUtilization() {

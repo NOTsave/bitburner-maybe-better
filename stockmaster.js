@@ -349,8 +349,14 @@ async function refresh(ns, has4s, allStocks, myStocks) {
                 doLog(ns, `WARNING: Detected a stock market tick after only ${formatDuration(Date.now() - lastTick)}, but expected ~${formatDuration(expectedTickTime)}. ` +
                     (changedPrices.length >= 33 ? '(All stocks updated)' : `The following ${changedPrices.length} stock prices changed: ${changedPrices.map(stk =>
                         `${stk.sym} ${formatMoney(stk.ask_price)} -> ${formatMoney(dictAskPrices[stk.sym])}`).join(", ")}`), false, 'warning');
-            } else
-                doLog(ns, `INFO: Detected a rapid stock market tick (${formatDuration(Date.now() - lastTick)}), likely to make up for lag / offline time.`)
+            } else {
+                // Check if this is an offline tick (catch-up after being away)
+                const isOfflineTick = Date.now() - lastTick > expectedTickTime * 3;
+                if (!isOfflineTick && Date.now() - lastTick < expectedTickTime - sleepInterval) {
+                    // Only warn on genuine fast ticks (not catch-up ticks)
+                    doLog(ns, `INFO: Detected a rapid stock market tick (${formatDuration(Date.now() - lastTick)}), likely to make up for lag / offline time.`)
+                }
+            }
         }
         lastTick = Date.now()
     }

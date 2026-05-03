@@ -145,8 +145,8 @@ async function manageStocks(ns, corp) {
         // NOTE: API doesn't track cost basis (shareSalePrice), so profit-based selling is not possible.
         // This logic sells 20% of holdings when above 80% of max to free up capital.
         // May sell at a loss - monitor manually if share price drops significantly.
-        if (currentHolding > totalIssued * 0.8) {
-            const toSell = Math.floor(currentHolding * 0.2); // Sell 20%
+        if (ownedShares > totalIssued * 0.8) {
+            const toSell = Math.floor(ownedShares * 0.2); // Sell 20%
             
             if (toSell > 0) {
                 await cc(ns, 'ns.corporation.sellShares(ns.args[0])', [toSell]);

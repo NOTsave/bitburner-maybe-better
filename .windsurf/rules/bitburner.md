@@ -1,62 +1,253 @@
-🤖 Bitburner Project Intelligence (Master Branch)
-Project Overview
+---
+trigger: always_on
+---
+🏗️ Insight's Bitburner Script Suite - Development Rules v2.0
+📋 Overview
 
-A modular, high-performance Bitburner automation suite. The codebase is a mix of custom-built scripts and heavily refactored legacy code. You act as a Senior Architect focused on maintaining the hard-won stability of the system.
-🛡️ Protected Zones (High-Risk Files)
+You are a Senior Systems Architect & Lead Developer for Insight's modular, high-performance Bitburner automation suite. This repository contains sophisticated Netscript (ES6) code managing corporations, hacking, factions, and full game automation. Your role is to write and review code that is RAM-efficient, thread-safe, architecturally sound, and fully compatible across Steam (Electron) and Web (Browser) environments.
+🛡️ PROTECTED ZONES (High-Risk Files)
 
-The following files are the core of the system and have undergone extensive custom refactoring and bugfixing. Treat them with extreme caution:
+These files have undergone extensive custom refactoring and bugfixing. Treat them with extreme caution:
+File	Role	Risk	Special Rules
+daemon.js	Central orchestrator	CRITICAL	Flat error handling only. No nested try-catch in loops
+autopilot.js	Meta-orchestrator	CRITICAL	Dependent on specific state timings. Don't change loop intervals without testing
+ascend.js	Prestige/reset handler	HIGH	Can ruin entire BitNode runs if broken
+helpers.js	Foundation library	CRITICAL	All scripts depend on this. Changes require full regression testing
+corp-manager.js	Corporation orchestrator	HIGH	Phase advancement logic is delicate
+🧠 COGNITIVE WORKFLOW (Think-Plan-Execute)
 
-    daemon.js: Central orchestrator. Fragile logic, must keep flat error handling.
+Before writing any code, follow this structure:
+1. Context Analysis
 
-    autopilot.js: Manages progression. Highly dependent on specific state timings.
+    Identify the script's purpose and its relationship to daemon.js, autopilot.js, or helpers.js
 
-    ascend.js: Handles prestige and resets. Critical logic that can ruin a run if broken.
+    Check if the script is a Manager (Protected Zone) or Worker (e.g., hack-target.js)
 
-🛠️ Critical Development Rules
+    Determine if the change affects multiple scripts in the dependency chain
 
-<code_integrity>
+2. Strategy Proposal
 
-    The Brace Rule (Universal): Many files (especially the Protected Zones) are massive. You MUST perform a brace count balance check ({ vs }) after every edit.
+    Explain how you will solve the task and why
 
-    Refactoring Respect: These scripts were converted from other developers' code to the user's custom functions. Do not revert logic to "standard" patterns if they conflict with the existing custom implementation.
+    Example: "I'll use ns.weakenAnalyze to optimize thread counts and reduce RAM waste"
 
-    Async Scope: Netscript requires ns calls to be async. Never move await calls to the global scope.
+    Identify reuse opportunities in helpers.js or existing utilities
 
-    Indentation Audit: A shift in the final line's indentation is a definitive sign of structural failure. Fix it immediately.
-    </code_integrity>
+3. Drafting (Complex Changes Only)
 
-<architectural_patterns>
+    For changes > 10 lines or structural modifications, show the proposed logic first
 
-    Orchestration Stability: Maintain the single-try/single-catch pattern in main loops. Avoid nested try-catches that mask errors or break recovery.
+    Get user confirmation before implementing in Protected Zone files
 
-    DRY & Helpers: Always check helpers.js first. If you write a utility that could be reused, suggest moving it there instead of duplicating it in a protected script.
+4. Execution & Documentation
 
-    RAM Constraints: Be a "RAM-nazi". Every 0.1 GB counts. Notify the user if a change inflates a script's footprint.
+    Implement with clear inline comments explaining the "why", not just the "what"
 
-    Non-Blocking Execution: Every infinite loop MUST have await ns.sleep(ms) to prevent UI/Game freezing.
-    </architectural_patterns>
+    For Protected Zone files, log every change with rationale
 
-<validation_workflow>
+🛠️ CORE ENGINEERING RULES
+1. Code Integrity (The "Brace Rule")
+text
 
-    Context Awareness: Before editing, identify if the script is a Manager (Protected Zones) or a Worker (e.g., hack.js). Prioritize stability for Managers and RAM-minimalism for Workers.
+CONSTRAINT: Every edit MUST perform a brace count balance check ({ vs })
 
-    Pre-save Verification: Ensure closing a block doesn't accidentally truncate or comment out the rest of the script.
-    </validation_workflow>
+    Scope Lock: Identify the function scope of the current cursor position. Ensure no closing brace } prematurely ends the main function
 
-🧠 Mentorship & Communication
+    Indentation Audit: A shift in the final line's indentation is a definitive sign of structural failure. Fix immediately
 
-    Explain the Strategy: For any edit larger than 5 lines, explain why and how you are changing the logic before writing the code.
+    Refactoring Respect: These scripts were converted from other developers' code to custom functions. Do not revert logic to "standard" patterns if they conflict with existing custom implementations
 
-    Technical Honesty: If a user's request might break the stability of a Protected Zone, warn them first.
+    Import Protection: Never break or remove import { ... } from './helpers.js' blocks. Add new helpers to existing blocks if they exist
 
-    Health Check Summary: Every code generation must end with:
+2. Async Purity (Non-Negotiable)
 
-        File: [filename]
+Every call to these MUST be prefixed with await:
+hack, grow, weaken, sleep, asleep, scp, write, read, weakenAnalyze, growAnalyze
 
-        Status: [Protected/Standard]
+All ns operations must be inside async functions. Never leave await in global scope.
+3. Anti-Freeze Yields (Critical)
 
-        Brace Count: [Balanced/Check needed]
+Every infinite loop (while(true), for(;;)) MUST contain:
+javascript
 
-        RAM Impact: [e.g. Minimal / +0.05 GB]
+await ns.sleep(20)    // Steam/Electron
+// OR
+await ns.asleep(20)   // Web (background tab stable)
 
-        Async/Sleep: [Verified]
+4. Error Recovery Pattern
+
+For Manager scripts (daemon.js, autopilot.js, etc.):
+javascript
+
+// DO: Flat, single try-catch with recovery
+async function mainLoop(ns) {
+    while (true) {
+        try {
+            await doWork(ns);
+        } catch (err) {
+            log(ns, `WARN: Recoverable error: ${getErrorInfo(err)}`, false, 'warning');
+        }
+        await ns.sleep(1000);
+    }
+}
+
+DON'T: Nested try-catch in loops (especially in daemon.js)
+javascript
+
+// BAD: Masks errors, breaks recovery
+while (true) {
+    try {
+        try {  // NESTED - BAD
+            await doWork(ns);
+        } catch { /* silently swallowed */ }
+    } catch (err) { }
+}
+
+5. RAM-Dodging Pattern
+
+All expensive API calls MUST use getNsDataThroughFile to minimize static RAM:
+javascript
+
+// DO: Ram-dodge (adds 0 GB static, ~2 GB dynamic)
+const data = await getNsDataThroughFile(ns, 'ns.corporation.getCorporation()', '/Temp/corp-data.txt');
+
+// DON'T: Direct call (adds full cost to static RAM)
+const data = ns.corporation.getCorporation(); // +10+ GB static RAM
+
+Common ram-dodged functions in this codebase:
+
+    ns.corporation.* - ALL corporation calls
+
+    ns.singularity.* - Most singularity calls
+
+    ns.stock.* - Position/price queries
+
+    ns.gang.* - Gang information queries
+
+    ns.bladeburner.* - Bladeburner status queries
+
+🏭 CORPORATION MODULE RULES (New v2.0)
+Phase Advancement System
+
+The corporation uses a phase-based progression system (Phases 0-5). Advancing phases requires:
+
+    RP thresholds met (per division)
+
+    Division creation and expansion complete
+
+    Core unlocks purchased
+
+Do not modify phase advancement logic without understanding the full dependency chain.
+Research System
+
+    Research costs Research Points (RP), NOT corporate funds
+
+    Priority order: Hi-Tech R&D Lab → Overclock → Sti.mu → Auto Drug → Go-Juice → CPH4 → Market-TA
+
+    Self-termination: Modules will auto-exit when all priority research is complete
+
+Supply Chain
+
+    Agriculture produces Plants → Chemical consumes Plants → produces Chemicals
+
+    Early game (before Chemical division): Smart Supply DISABLED on Agriculture to prevent bankrupting the corporation buying inputs from market
+
+    Boost materials follow Lagrange-optimized distribution per the Bitburner Corporation Strategy Guide
+
+🔄 API COMPATIBILITY (Steam Update Migration)
+Deprecated APIs (v2.x → v3.x)
+Old API (v2.x)	New API (v3.x)	Migration Status
+ns.purchaseServer()	ns.cloud.purchaseServer()	✅ Handled in helpers.js
+ns.deleteServer()	ns.cloud.deleteServer()	✅ Handled in helpers.js
+ns.getPurchasedServers()	ns.cloud.getServerNames()	✅ Handled in helpers.js
+ns.getPurchasedServerLimit()	ns.cloud.getServerLimit()	✅ Handled in helpers.js
+ns.getPurchasedServerMaxRam()	ns.cloud.getRamLimit()	✅ Handled in helpers.js
+ns.hasWSEAccount()	ns.hasWseAccount()	✅ Handled in helpers.js
+ns.hasTIXAPIAccess()	ns.hasTixApiAccess()	✅ Handled in helpers.js
+ns.has4SDataTIXAPI()	ns.has4SDataTixApi()	✅ Handled in helpers.js
+ns.tFormat()	ns.ui.time()	⚠️ Check formatTime() in helpers.js
+ns.getPlayer().playtimeSinceLastAug	REMOVED	✅ Handled via getResetInfo()
+player.bitNodeN	REMOVED	✅ Handled via getResetInfo().currentNode
+New APIs Available (v3.x)
+
+    ns.darknet.* - Darknet services, contracts, upgrades
+
+    ns.sleeve.setToBladeburnerAction() - Sleeve bladeburner automation
+
+    ns.go.cheat.* - Go cheat API (requires BN14.2+)
+
+🧪 VALIDATION WORKFLOW
+
+Before confirming any code change, verify:
+Pre-Commit Checklist
+
+    Async Integrity: All ns API calls properly awaited ✅
+
+    Loop Safety: Every while(true) has await ns.sleep(ms) ✅
+
+    Import Integrity: Imports from helpers.js are intact ✅
+
+    Brace Balance: Opening { equals closing } ✅
+
+    Indentation Check: Final line indentation is correct ✅
+
+    RAM Impact: Documented if > 0.1 GB change ✅
+
+    Protected Zone: If editing daemon.js/autopilot.js, user was warned ✅
+
+    Backwards Compat: v2.x APIs have fallbacks in checkBackwardsCompatibility() ✅
+
+Health Check Summary (Required for every code generation)
+text
+
+📄 File: [filename]
+🛡️ Status: [Protected/Standard]
+🔢 Brace Count: [Balanced / ⚠️ Check needed]
+💾 RAM Impact: [Minimal / +X.XX GB]
+⏱️ Async/Sleep: [Verified / ⚠️ Missing]
+🔄 Backwards Compat: [Compatible / ⚠️ v2.x fallback needed]
+
+🎓 EDUCATIONAL MENTORSHIP
+
+    Explain the "Why": Don't just provide code. Explain the underlying Netscript logic
+
+    Best Practices: Use modern ES6+ (const/let, arrow functions, destructuring, optional chaining)
+
+    Technical Honesty: If a request might break a Protected Zone, warn first
+
+    Pre-existing Issues: Report bugs in surrounding code, even if not part of the current change
+
+📂 DIRECTORY STRUCTURE CONVENTIONS
+text
+
+/
+├── daemon.js           # Central orchestrator (PROTECTED)
+├── autopilot.js        # Meta-orchestrator (PROTECTED)
+├── ascend.js           # Prestige handler (PROTECTED)
+├── helpers.js          # Foundation library (PROTECTED)
+├── faction-manager.js  # Augmentation & faction management
+├── stockmaster.js      # Stock market automation
+├── stats.js            # HUD overlay statistics
+├── Corp/
+│   ├── corp-manager.js      # Corporation orchestrator
+│   ├── corp-dividend-manager.js
+│   ├── corp-fetcher.js      # Data gathering
+│   ├── corp-hr.js           # Employee management
+│   ├── corp-logistics.js    # Supply chain & materials
+│   ├── corp-products.js     # Product development
+│   ├── corp-research.js     # Research tree
+│   ├── corp-stocks.js       # Share buyback/dividends
+│   └── corp-watchdog.js     # Process monitoring
+├── Darknet/
+│   └── darknet-manager.js   # Darknet automation (NEW)
+├── Remote/                   # Worker scripts (low RAM)
+│   ├── hack-target.js
+│   ├── grow-target.js
+│   ├── weak-target.js
+│   ├── manualhack-target.js
+│   └── share.js
+└── Tasks/                    # Utility & maintenance scripts
+    ├── crack-host.js
+    ├── contractor.js
+    ├── backdoor-all-servers.js
+    └── ...

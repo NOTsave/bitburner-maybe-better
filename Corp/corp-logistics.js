@@ -91,9 +91,12 @@ async function manageEarlyGameSmartSupply(ns, corp) {
                 [agriDiv.name, city]);
             if (!warehouse) continue;
             
-            // FORCE Smart Supply OFF every time - don't check, just disable
-            await cc(ns, 'ns.corporation.setSmartSupply(ns.args[0], ns.args[1], false)', 
-                [agriDiv.name, city]);
+            // Check Smart Supply unlock before attempting to disable
+            const hasSmartSupply = await cc(ns, 'ns.corporation.hasUnlock("Smart Supply")');
+            if (hasSmartSupply) {
+                await cc(ns, 'ns.corporation.setSmartSupply(ns.args[0], ns.args[1], false)', 
+                    [agriDiv.name, city]);
+            }
             
             if (warehouse.smartSupplyEnabled) {
                 log(ns, `WARN: DISABLED Smart Supply on ${agriDiv.name}/${city}`, false, 'warning');
@@ -403,21 +406,27 @@ async function setupMaterialExports(ns, corp) {
             const chemExports = await cc(ns, 'ns.corporation.getMaterial(ns.args[0], ns.args[1], ns.args[2])',
                 [chemDiv.name, city, 'Chemicals']);
             
-            // Export Chemicals from Chemical to Agriculture
-            if (chemExports && !chemExports.exports?.some(e => e.division === agriDiv.name)) {
-                await cc(ns, 'ns.corporation.exportMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4], ns.args[5])',
-                    [chemDiv.name, city, agriDiv.name, city, 'Chemicals', 'MAX']);
-                log(ns, `INFO: Export setup: ${chemDiv.name} → ${agriDiv.name}: Chemicals (${city})`, false, 'info');
+            // Check Export unlock before setting up exports
+            const hasExport = await cc(ns, 'ns.corporation.hasUnlock("Export")');
+            if (hasExport) {
+                // Export Chemicals from Chemical to Agriculture
+                if (chemExports && !chemExports.exports?.some(e => e.division === agriDiv.name)) {
+                    await cc(ns, 'ns.corporation.exportMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4], ns.args[5])',
+                        [chemDiv.name, city, agriDiv.name, city, 'Chemicals', 'MAX']);
+                    log(ns, `INFO: Export setup: ${chemDiv.name} → ${agriDiv.name}: Chemicals (${city})`, false, 'info');
+                }
             }
             
             // Export Plants from Agriculture to Chemical
             const plantExports = await cc(ns, 'ns.corporation.getMaterial(ns.args[0], ns.args[1], ns.args[2])',
                 [agriDiv.name, city, 'Plants']);
             
-            if (plantExports && !plantExports.exports?.some(e => e.division === chemDiv.name)) {
-                await cc(ns, 'ns.corporation.exportMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4], ns.args[5])',
-                    [agriDiv.name, city, chemDiv.name, city, 'Plants', 'MAX']);
-                log(ns, `INFO: Export setup: ${agriDiv.name} → ${chemDiv.name}: Plants (${city})`, false, 'info');
+            if (hasExport) {
+                if (plantExports && !plantExports.exports?.some(e => e.division === chemDiv.name)) {
+                    await cc(ns, 'ns.corporation.exportMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4], ns.args[5])',
+                        [agriDiv.name, city, chemDiv.name, city, 'Plants', 'MAX']);
+                    log(ns, `INFO: Export setup: ${agriDiv.name} → ${chemDiv.name}: Plants (${city})`, false, 'info');
+                }
             }
         } catch (e) {
             // Silent fail for individual cities
@@ -449,7 +458,9 @@ async function manageMaterialSales(ns, corp) {
                 
                 // Get materials this industry produces (API changed in v2.2.0)
                 // Note: getIndustryData needs IndustryType (e.g., "Agriculture"), not division name
-                const industryData = await cc(ns, 'ns.corporation.getIndustryData(ns.args[0])', [div.type]);
+                // Use explicit type with fallback to prevent undefined errors
+                const industryType = div.type || 'Agriculture'; // Fallback for safety
+                const industryData = await cc(ns, 'ns.corporation.getIndustryData(ns.args[0])', [industryType]);
                 const materials = industryData?.producedMaterials || [];
                 
                 for (const materialName of materials) {
@@ -462,8 +473,9 @@ async function manageMaterialSales(ns, corp) {
                             log(ns, `DEBUG: ${div.name}/${city}/${materialName}: stored=${material.stored?.toFixed(2) || 0}, prod=${material.productionAmount?.toFixed(2) || 0}, sell=${material.actualSellAmount?.toFixed(2) || 0}`, false, 'info');
                         }
                         
-                        // Sell material if we have any stored
-                        if (material && material.stored > 0) {
+                        // Check Smart Supply unlock before selling materials
+                        const hasSmartSupply = await cc(ns, 'ns.corporation.hasUnlock("Smart Supply")');
+                        if (hasSmartSupply && material && material.stored > 0) {
                             log(ns, `INFO: Selling ${material.stored.toFixed(2)} ${materialName} from ${div.name}/${city} at MAX/MP`, false, 'info');
                             await cc(ns, 'ns.corporation.sellMaterial(ns.args[0], ns.args[1], ns.args[2], ns.args[3], ns.args[4])',
                                 [div.name, city, materialName, 'MAX', 'MP']);
