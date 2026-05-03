@@ -2,7 +2,7 @@ let options;
 const argsSchema = [
     ['github', 'NOTsave'],
     ['repository', 'bitburner-maybe-better'],
-    ['branch', 'beta'],
+    ['branch', 'main'],
     ['download', []], // By default, all supported files in the repository will be downloaded. Override with just a subset of files here
     ['new-file', []], // If a repository listing fails, only files returned by ns.ls() will be downloaded. You can add additional files to seek out here.
     ['subfolder', ''], // Can be set to download to a sub-folder that is not part of the remote repository structure
@@ -48,7 +48,7 @@ export async function main(ns) {
 /** Removes leading and trailing slashes from the specified string */
 function trimSlash(s) {
     // Once upon a time, the game API required folders to have a leading slash
-    // As of 2.3.1, not only is this no longer needed, but it can break the game.
+    // As of 3.0.0, not only is this no longer needed, but it can break the game.
     if (s.startsWith('/'))
         s = s.slice(1);
     if (s.endsWith('/'))
