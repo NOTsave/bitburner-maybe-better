@@ -1,8 +1,7 @@
-import {
-    log, getConfiguration, instanceCount, getNsDataThroughFile, runCommand, waitForProcessToComplete,
+import { log, getConfiguration, instanceCount, getNsDataThroughFile, runCommand, waitForProcessToComplete,
     getActiveSourceFiles, tryGetBitNodeMultipliers, getStocksValue, unEscapeArrayArgs,
-    formatMoney, formatDuration, formatNumber, getErrorInfo, tail, jsonReplacer
-} from './helpers.js'
+    formatMoney, formatDuration, formatNumber, getErrorInfo, tail, jsonReplacer, getFilePath, DEFAULT_CORP_DATA_PATH, getCachedCorpData } from './helpers.js'
+import { maximizeDividends } from './Corp/corp-dividend-manager.js'
 
 // Cache frequently used format functions to reduce property access
 const fmtMoney = formatMoney;
@@ -49,6 +48,7 @@ export function autocomplete(data, args) {
 export async function main(ns) {
     const persistentLog = "log.autopilot.txt";
     const factionManagerOutputFile = "/Temp/affordable-augs.txt"; // Temp file produced by faction manager with status information
+    const casinoDoneFile = "/Flags/autopilot-casino-done.txt"; // File to persist casino completion state across restarts
     const defaultBnOrder = [ // The order in which we intend to play bitnodes
         // 1st Priority: Key new features and/or major stat boosts
         4.3,  // Normal. Need singularity to automate everything, and need the API costs reduced from 16x -> 4x -> 1x reliably do so from the start of each BN
@@ -91,7 +91,10 @@ export async function main(ns) {
     let playerInGang = false, rushGang = false; // Tells us whether we're should be trying to work towards getting into a gang
     let playerInBladeburner = false; // Whether we've joined bladeburner
     let wdHack = (/**@returns{null|number}*/() => null)(); // If the WD server is available (i.e. TRP is installed), caches the required hack level
-    let ranCasino = false; // Flag to indicate whether we've stolen 10b from the casino yet
+    let ranCasino = ns.fileExists(casinoDoneFile); // Flag to indicate whether we've stolen 10b from the casino yet (persisted to file)
+    let casinoState = { running: false, pid: 0 }; // Unified casino state tracking
+    let lastCasinoLog = 0; // Last time we logged about needing casino funds
+    const CASINO_THRESHOLD = 10 * 1e9; // Fix 4: Constant for Magic Number
     let reservedPurchase = 0; // The amount of player money that has been reserved to purchase augmentations
     let alreadyJoinedDaedalus = false, autoJoinDaedalusUnavailable = false, reservingMoneyForDaedalus = false, disableStockmasterForDaedalus = false; // Flags to indicate that we should be keeping 100b cash on hand to earn an invite to Daedalus
     let prioritizeHackForDaedalus = false, prioritizeHackForWd = false;
@@ -337,7 +340,7 @@ export async function main(ns) {
         // Check for sufficient hacking level before attempting to reserve money
         if (player.skills.hacking < 2500) {
             // If we happen to already have enough money for daedalus and are only waiting on hack-level,
-            // set a flag to switch daemon.js into --xp-only mode, to prioritize earning hack exp over money
+                // set a flag to switch daemon.js into --xp-only mode, to prioritize earning hack exp over money
             // HEURISTIC (i.e. Hack): Only do this if we naturally get within 75% of the hack stat requirement,
             //    otherwise, assume our hack gain rate is too low in this reset to make it all the way to 2500.
             if (totalWorth >= moneyReq && player.skills.hacking >= (2500 * 0.75))
@@ -676,10 +679,10 @@ export async function main(ns) {
             (["--xp-only"].some(arg => !daemonArgs.includes(arg) && existingDaemon.args.includes(arg)))
         if (launchDaemon) {
             if (existingDaemon) {
-                daemonRelaunchMessage ??= `Relaunching daemon-unified.js with new arguments since the current instance doesn't include all the args we want.`;
+                daemonRelaunchMessage ??= `Relaunching daemon.js with new arguments since the current instance doesn't include all the args we want.`;
                 log(ns, daemonRelaunchMessage);
             }
-            let daemonPid = launchScriptHelper(ns, 'daemon-unified.js', daemonArgs);
+            let daemonPid = launchScriptHelper(ns, 'daemon.js', daemonArgs);
             daemonStartTime = Date.now();
             // Open the tail window if it's the start of a new BN. Especially useful to new players.
             if (getTimeInBitnode() < 1000 * 60 * 5 || homeRam == 8) // First 5 minutes, or BN1.1 where we have 8GB ram
@@ -762,68 +765,76 @@ export async function main(ns) {
         acceptedStanek = true;
     }
 
-    /** Logic to steal 10b from the casino
+    /** Logic to steal 10b from casino with enhanced corp coordination
      * @param {NS} ns
      * @param {Player} player */
     async function maybeDoCasino(ns, player) {
         if (ranCasino || options['disable-casino']) return;
-        // Figure out whether we've already been kicked out of the casino for earning more than 10b there
-        const moneySources = await getPlayerMoneySources(ns);
-        const casinoEarnings = moneySources.sinceInstall.casino;
-        if (casinoEarnings >= 1e10) {
-            log(ns, `INFO: Skipping running casino.js, as we've previously earned ${fmtMoney(casinoEarnings)} and been kicked out.`);
-            return ranCasino = true;
-        }
-        // If we already have more than 1t money but hadn't run casino.js yet, don't bother. Another 10b won't move the needle much.
-        const playerWealth = player.money + (await getStocksValue(ns));
-        if (playerWealth >= 1e12) {
-            log(ns, `INFO: Skipping running casino.js, since we're already ridiculously wealthy (${fmtMoney(playerWealth)} > 1t).`);
-            return ranCasino = true;
+
+        // Check if we already hit the target money
+        if (player.money >= CASINO_THRESHOLD) {
+            ranCasino = true;
+            ns.write(casinoDoneFile, "done", "w"); // Persist completion state
+            casinoState = { running: false, pid: 0 };
+            return;
         }
 
-        // If we're making more than ~5b / minute from the start of the BN, there's no need to run casino.
-        // In BN8 this is impossible, so in that case we don't even check and head straight to the casino.
-        if (resetInfo.currentNode != 8) {
-            // If we've been in the BN for less than 1 minute, wait a while to establish player's income rate 
-            if (getTimeInAug() < 60000)
-                return log_once(ns, `INFO: Waiting a minute to establish player income before deciding whether casino.js is needed.`);
-            // Since it's possible that the CashRoot Startker Kit could give a false income velocity, account for that.
-            const cashRootBought = installedAugmentations.includes(`CashRoot Starter Kit`);
-            const incomePerMs = (playerWealth - (cashRootBought ? 1e6 : 0)) / getTimeInAug();
-            const incomePerMinute = incomePerMs * 60_000;
-            if (incomePerMinute >= 5e9) {
-                log(ns, `INFO: Skipping running casino.js this augmentation, since our income (${fmtMoney(incomePerMinute)}/min) >= 5b/min`);
-                return ranCasino = true;
+        // Monitor existing casino process if running
+        if (casinoState.running && casinoState.pid > 0) {
+            const alive = ns.ps().some(p => p.pid === casinoState.pid);
+            const goalReached = player.money >= CASINO_THRESHOLD;
+
+            if (!alive && !goalReached) {
+                log(ns, "FAIL: Casino script died without reaching threshold.", false, 'error');
+                casinoState = { running: false, pid: 0 };
+            } else if (goalReached) {
+                log(ns, "SUCCESS: Goal reached. Killing script if still alive.", false, 'success');
+                if (alive) ns.scriptKill("casino.js", "home");
+                casinoState = { running: false, pid: 0 };
+                ranCasino = true; // Mark as completed when goal reached
+                ns.write(casinoDoneFile, "done", "w"); // Persist completion state
             }
+            return; // Exit early if we're monitoring an existing process
         }
 
-        // If we aren't in Aevum already, wait until we have the 200K required to travel (plus some extra buffer to actually spend at the casino)
-        if (player.city != "Aevum" && player.money < 300000)
-            return log_once(ns, `INFO: Waiting until we have ${fmtMoney(300000)} to travel to Aevum and run casino.js`);
+        // Pre-check: Ensure we have enough money for casino travel (200k minimum, 300k buffer to match sleeve reserve)
+        const CASINO_SEED_MONEY = 300000;
+        if (player.money < CASINO_SEED_MONEY) {
+            // Only log once per minute to reduce spam
+            const now = Date.now();
+            if (now - lastCasinoLog > 60000) {
+                log(ns, `INFO: Need ${formatMoney(CASINO_SEED_MONEY)} to run casino, have ${formatMoney(player.money)}. Will retry...`, false, 'info');
+                lastCasinoLog = now;
+            }
+            return;
+        }
 
-        // Run casino.js (and expect this script to get killed in the process)
-        // Make sure "work-for-factions.js" is dead first, lest it steal focus and break the casino script before it has a chance to kill all scripts.
-        await killScript(ns, 'work-for-factions.js');
-        await killScript(ns, 'daemon.js'); // We also have to kill daemon which can make us study.
-        // Kill any action, in case we are studying or working out, as it might steal focus or funds before we can bet it at the casino.
-        if (4 in unlockedSFs) // No big deal if we can't, casino.js has logic to find the stop button and click it.
-            _ = await getNsDataThroughFile(ns, `ns.singularity.stopAction()`);
+        // Launch new casino script if not running
+        const casinoScript = getFilePath('casino.js');
+        if (!ns.fileExists(casinoScript)) {
+            log(ns, "ERROR: casino.js missing.", true, 'error');
+            ranCasino = true;
+            return;
+        }
 
-        const pid = launchScriptHelper(ns, 'casino.js', ['--kill-all-scripts', true, '--on-completion-script', ns.getScriptName()]);
-        if (pid) {
-            await waitForProcessToComplete(ns, pid);
-            await ns.sleep(10000); // Give time for this script to be killed if the game is being restarted by casino.js
-            // Otherwise, something went wrong
-            log(ns, `ERROR: Something went wrong. casino.js was run, but we haven't been killed. It must have run into a problem...`)
+        const casinoArgs = ['--kill-all-scripts', 'true', '--on-completion-script', getFilePath('autopilot.js')];
+        const pid = ns.run(casinoScript, 1, ...casinoArgs);
+
+        if (pid > 0) {
+            casinoState = { running: true, pid: pid };
+            log(ns, `INFO: Casino started successfully (PID: ${pid}). Monitoring progress...`, false, 'info');
+        } else {
+            log(ns, "ERROR: Failed to launch casino.js. Check RAM.", true, 'error');
+            casinoState = { running: false, pid: 0 };
         }
     }
 
     /** Retrieves the last faction manager output file, parses, and provides type-hints for it.
      * @returns {{ installed_augs: string[], installed_count: number, installed_count_nf: number, installed_count_ex_nf: number,
-     *             owned_augs: string[], owned_count: number, owned_count_nf: number, owned_count_ex_nf: number,
-     *             awaiting_install_augs: string[], awaiting_install_count: number, awaiting_install_count_nf: number, awaiting_install_count_ex_nf: number,
-     *             affordable_augs: string[], affordable_count: number, affordable_count_nf: number, affordable_count_ex_nf: number,
-     *             total_rep_cost: number, total_aug_cost: number, unowned_count: number }} */
+     *           owned_augs: string[], owned_count: number, owned_count_nf: number, owned_count_ex_nf: number,
+     *           awaiting_install_augs: string[], awaiting_install_count: number, awaiting_install_count_nf: number, awaiting_install_count_ex_nf: number,
+     *           affordable_augs: string[], affordable_count: number, affordable_count_nf: number, affordable_count_ex_nf: number,
+     *           total_rep_cost: number, total_aug_cost: number, unowned_count: number }} */
     function getFactionManagerOutput(ns) {
         const facmanOutput = ns.read(factionManagerOutputFile)
         return !facmanOutput ? null : JSON.parse(facmanOutput)
@@ -926,6 +937,16 @@ export async function main(ns) {
         if (await shouldDelayInstall(ns, player, facman)) // If we're currently in a state where we should not be resetting, skip reset logic
             return reservedPurchase = 0;
 
+        // Force dividend payout through standardized data retrieval system (only if corp API is available)
+        const hasCorpApi = (resetInfo.currentNode === 3 || 3 in dictOwnedSourceFiles) && resetInfo.currentNode !== 8;
+        if (hasCorpApi) {
+            const corpData = getCachedCorpData(ns);
+            if (corpData && corpData.divisions) {
+                // Set dividends to 100% right before reset to squeeze every dollar for final augs
+                await maximizeDividends(ns, 'Final augmentation push before reset');
+            }
+        }
+
         // Ensure the money needed for the above augs doesn't get ripped out from under us by reserving it
         if (reservedPurchase < totalCost) {
             // A countdown is displayed to give the user a heads up, and give us time to potentially earn money for more augmentations
@@ -994,9 +1015,9 @@ export async function main(ns) {
         if (await checkIfGrafting(ns))
             return true;
         // Are we close to being able to afford 4S TIX data?
-        if (!have4STixApi) have4STixApi = await getNsDataThroughFile(ns, `ns.stock.has4SDataTixApi()`);
+        if (!have4STixApi) have4STixApi = await getNsDataThroughFile(ns, `(() => { try { return ns.stock.has4SDataTixApi(); } catch { return false; } })()`);
         if (!options['disable-wait-for-4s'] && !have4STixApi) {
-            if (!have4SData) have4SData = await getNsDataThroughFile(ns, `ns.stock.has4SData()`);
+            if (!have4SData) have4SData = await getNsDataThroughFile(ns, `(() => { try { return ns.stock.has4SData(); } catch { return false; } })()`);
             const totalWorth = player.money + await getStocksValue(ns);
             const totalCost = 25E9 * bitNodeMults.FourSigmaMarketDataApiCost +
                 (have4SData ? 0 : 1E9 * bitNodeMults.FourSigmaMarketDataCost);

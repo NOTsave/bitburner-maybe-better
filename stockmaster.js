@@ -1,7 +1,13 @@
 import {
-    instanceCount, getConfiguration, getNsDataThroughFile, runCommand, getActiveSourceFiles, tryGetBitNodeMultipliers,
-    formatMoney, formatNumberShort, formatDuration, getStockSymbols
-} from './helpers.js'
+    log, getConfiguration, instanceCount,
+    GENERIC_TEMP_PATH, getJitteredSleep, STOCK_DATA_PATH, STOCK_PROBABILITIES_PATH,
+    getNsDataThroughFile, runCommand, getActiveSourceFiles,
+    tryGetBitNodeMultipliers, formatNumberShort, formatMoney, formatDuration, getFilePath, getStockSymbols,
+    safelyWriteData
+} from './helpers.js';
+
+const STOCKS_CACHE_PATH = `${GENERIC_TEMP_PATH}stocks.json`;
+const STOCK_SUMMARY_PATH = `${GENERIC_TEMP_PATH}stock-summary.txt`;
 
 let disableShorts = false;
 let commission = 100000; // Buy/sell commission. Expected profit must exceed this to buy anything.
@@ -74,19 +80,21 @@ export async function main(ns) {
 
     // If given the "liquidate" command, try to kill any versions of this script trading in stocks
     // NOTE: We must do this immediately before we start resetting / overwriting global state below (which is shared between script instances)
-    const hasTixApiAccess = await getNsDataThroughFile(ns, 'ns.stock.hasTixApiAccess()');
+    const hasTixApiAccess = await getNsDataThroughFile(ns, `(() => { try { return ns.stock.hasTixApiAccess(); } catch { return false; } })()`);
     if (runOptions.l || runOptions.liquidate) {
-        if (!hasTixApiAccess) return log(ns, 'ERROR: Cannot liquidate stocks because we do not have Tix Api Access', true, 'error');
-        log(ns, 'INFO: Killing any other stockmaster processes...', false, 'info');
+        if (!hasTixApiAccess) return doLog(ns, 'ERROR: Cannot liquidate stocks because we do not have Tix Api Access', true, 'error');
+        doLog(ns, 'INFO: Killing any other stockmaster processes...', false, 'info');
         await runCommand(ns, `ns.ps().filter(proc => proc.filename == '${ns.getScriptName()}' && !proc.args.includes('-l') && !proc.args.includes('--liquidate'))` +
             `.forEach(proc => ns.kill(proc.pid))`, '/Temp/kill-stockmarket-scripts.js');
-        log(ns, 'INFO: Checking for and liquidating any stocks...', false, 'info');
+        doLog(ns, 'INFO: Checking for and liquidating any stocks...', false, 'info');
         await liquidate(ns); // Sell all stocks
         return;
     } // Otherwise, prevent multiple instances of this script from being started, even with different args.
     if ((await instanceCount(ns)) > 1) return;
 
     ns.disableLog("ALL");
+    // Ensure /Temp directory exists by writing a test file (Bitburner auto-creates parent dirs)
+    await ns.write('/Temp/temp.txt', '', 'w');
     // Extract various options from the args (globals, purchasing decision factors, pre-4s factors)
     options = runOptions; // We don't set the global "options" until we're sure this is the only running instance
     mock = options.mock;
@@ -98,10 +106,10 @@ export async function main(ns) {
     disableShorts = options['disable-shorts'];
     const pre4sBuyThresholdProbability = options['pre-4s-buy-threshold-probability'];
     const pre4sMinBlackoutWindow = options['pre-4s-min-blackout-window'] || 1;
-    const pre4sMinHoldTime = options['pre-4s-minimum-hold-time'] || 0;
-    minTickHistory = options['pre-4s-min-tick-history'] || 21;
-    nearTermForecastWindowLength = options['pre-4s-inversion-detection-window'] || 10;
-    longTermForecastWindowLength = options['pre-4s-forecast-window'] || (marketCycleLength + 1);
+    const pre4sMinHoldTime = options['pre-4s-minimum-hold-time'] ?? 0;
+    minTickHistory = options['pre-4s-min-tick-history'] ?? 21;
+    nearTermForecastWindowLength = options['pre-4s-inversion-detection-window'] ?? 10;
+    longTermForecastWindowLength = options['pre-4s-forecast-window'] ?? (marketCycleLength + 1);
     showMarketSummary = options['show-pre-4s-forecast'] || options['show-market-summary'];
     // Other global values must be reset at start lest they be left in memory from a prior run
     lastTick = 0, totalProfit = 0, lastLog = "", marketCycleDetected = false, detectedCycleTick = 0, inversionAgreementThreshold = 6;
@@ -111,26 +119,35 @@ export async function main(ns) {
 
     if (!hasTixApiAccess) { // You cannot use the stockmaster until you have API access
         if (options['disable-purchase-tix-api'])
-            return log(ns, "ERROR: You do not have stock market API access, and --disable-purchase-tix-api is set.", true);
+            return doLog(ns, "ERROR: You do not have stock market API access, and --disable-purchase-tix-api is set.", true);
         let success = false;
-        log(ns, `INFO: You are missing stock market API access. (NOTE: This is granted for free once you have SF8). ` +
+        doLog(ns, `INFO: You are missing stock market API access. (NOTE: This is granted for free once you have SF8). ` +
             `Waiting until we have the 5b needed to buy it. (Run with --disable-purchase-tix-api to disable this feature.)`, true);
-        do {
-            await ns.sleep(sleepInterval);
+        while (true) {
             try {
-                const reserve = options['reserve'] != null ? options['reserve'] : Number(ns.read("reserve.txt") || 0);
-                player = await getPlayerInfo(ns);
-                success = await tryGetStockMarketAccess(ns, player.money - reserve);
+                const stockData = await gatherMarketData(ns);
+                
+                // Write stock data cache for other scripts (atomic write to prevent corruption)
+                // Note: Errors are suppressed (silent=true) as this is non-critical temp data that's refreshed frequently.
+                // If debugging write failures, change silent to false temporarily.
+                const wrappedData = {
+                    timestamp: Date.now(),
+                    payload: stockData
+                };
+                await safelyWriteData(ns, STOCKS_CACHE_PATH, wrappedData, true);
+                
             } catch (err) {
-                log(ns, `WARNING: stockmaster.js Caught (and suppressed) an unexpected error while waiting to buy stock market access:\n` +
-                    (typeof err === 'string' ? err : err.message || JSON.stringify(err)), false, 'warning');
+                doLog(ns, `WARNING: Stock data gather failed: ${err}`, false, 'warning');
             }
-        } while (!success);
+
+            // Fix: Use Jittered Sleep to prevent IO pile-ups
+            await ns.sleep(getJitteredSleep());
+        }
     }
 
     const effectiveSourceFiles = await getActiveSourceFiles(ns, true); // Find out what source files the user has unlocked
     if (!disableShorts && (effectiveSourceFiles[8] ?? 0) < 2) {
-        log(ns, "INFO: Shorting stocks has been disabled (you have not yet unlocked access to shorting)");
+        doLog(ns, "INFO: Shorting stocks has been disabled (you have not yet unlocked access to shorting)");
         disableShorts = true;
     }
 
@@ -146,7 +163,7 @@ export async function main(ns) {
         ns.atExit(() => hudElement.parentElement.parentElement.parentElement.removeChild(hudElement.parentElement.parentElement));
     }
 
-    log(ns, `Welcome! Please note: all stock purchases will initially result in a Net (unrealized) Loss. This is not only due to commission, but because each stock has a 'spread' (difference in buy price and sell price). ` +
+    doLog(ns, `Welcome! Please note: all stock purchases will initially result in a Net (unrealized) Loss. This is not only due to commission, but because each stock has a 'spread' (difference in buy price and sell price). ` +
         `This script is designed to buy stocks that are most likely to surpass that loss and turn a profit, but it will take a few minutes to see the progress.\n\n` +
         `If you choose to stop the script, make sure you SELL all your stocks (can go 'run ${ns.getScriptName()} --liquidate') to get your money back.\n\nGood luck!\n~ Insight\n\n`)
 
@@ -154,7 +171,7 @@ export async function main(ns) {
     while (true) {
         try {
             const playerStats = await getPlayerInfo(ns);
-            const reserve = options['reserve'] != null ? options['reserve'] : Number(ns.read("reserve.txt") || 0);
+            const reserve = options['reserve'] != null ? options['reserve'] : Number(ns.read("reserve.txt") ?? 0);
             // Check whether we have 4s access yes (once we do, we can stop checking)
             if (pre4s) pre4s = !(await checkAccess(ns, "has4SDataTixApi"));
             const holdings = await refresh(ns, !pre4s, allStocks, myStocks); // Returns total stock value
@@ -169,7 +186,7 @@ export async function main(ns) {
                 doStatusUpdate(ns, allStocks, myStocks, hudElement);
             else if (hudElement) hudElement.innerText = "$0.000 ";
             if (pre4s && allStocks[0].priceHistory.length < minTickHistory) {
-                log(ns, `Building a history of stock prices (${allStocks[0].priceHistory.length}/${minTickHistory})...`);
+                doLog(ns, `Building a history of stock prices (${allStocks[0].priceHistory.length}/${minTickHistory})...`);
                 await ns.sleep(sleepInterval);
                 continue;
             }
@@ -179,7 +196,7 @@ export async function main(ns) {
             for (let stk of myStocks) {
                 if (stk.absReturn() <= thresholdToSell || stk.bullish() && stk.sharesShort > 0 || stk.bearish() && stk.sharesLong > 0) {
                     if (pre4s && stk.ticksHeld < pre4sMinHoldTime) {
-                        if (!stk.warnedBadPurchase) log(ns, `WARNING: Thinking of selling ${stk.sym} with ER ${formatBP(stk.absReturn())}, but holding out as it was purchased just ${stk.ticksHeld} ticks ago...`);
+                        if (!stk.warnedBadPurchase) doLog(ns, `WARNING: Thinking of selling ${stk.sym} with ER ${formatBP(stk.absReturn())}, but holding out as it was purchased just ${stk.ticksHeld} ticks ago...`);
                         stk.warnedBadPurchase = true; // Hack to ensure we don't spam this warning
                     } else {
                         sales += await doSellAll(ns, stk);
@@ -221,7 +238,7 @@ export async function main(ns) {
                     let estEndOfCycleValue = numShares * purchasePrice * ((stk.absReturn() + 1) ** ticksBeforeCycleEnd - 1); // Expected difference in purchase price and value at next market cycle end
                     let owned = stk.ownedShares() > 0;
                     if (estEndOfCycleValue <= 2 * commission)
-                        log(ns, (owned ? '' : `We currently have ${formatNumberShort(stk.ownedShares(), 3, 1)} shares in ${stk.sym} valued at ${formatMoney(stk.positionValue())} ` +
+                        doLog(ns, (owned ? '' : `We currently have ${formatNumberShort(stk.ownedShares(), 3, 1)} shares in ${stk.sym} valued at ${formatMoney(stk.positionValue())} ` +
                             `(${(100 * stk.positionValue() / maxHoldings).toFixed(1)}% of corpus, capped at ${(diversification * 100).toFixed(1)}% by --diversification).\n`) +
                             `Despite attractive ER of ${formatBP(stk.absReturn())}, ${owned ? 'more ' : ''}${stk.sym} was not bought. ` +
                             `\nBudget: ${formatMoney(budget)} can only buy ${numShares.toLocaleString('en')} ${owned ? 'more ' : ''}shares @ ${formatMoney(purchasePrice)}. ` +
@@ -232,7 +249,7 @@ export async function main(ns) {
                 }
             }
         } catch (err) {
-            log(ns, `WARNING: stockmaster.js Caught (and suppressed) an unexpected error in the main loop:\n` +
+            doLog(ns, `WARNING: stockmaster.js Caught (and suppressed) an unexpected error in the main loop:\n` +
                 (typeof err === 'string' ? err : err.message || JSON.stringify(err)), false, 'warning');
         }
         await ns.sleep(sleepInterval);
@@ -261,6 +278,26 @@ async function getStockInfoDict(ns, stockFunction) {
         `Object.fromEntries(ns.args.map(sym => [sym, ns.stock.${stockFunction}(sym)]))`,
         `/Temp/stock-${stockFunction}.txt`, allStockSymbols);
 };
+
+/** Gather basic stock market status for caching when waiting for API access
+ * @param {NS} ns */
+async function gatherMarketData(ns) {
+    try {
+        // Check basic stock market access without requiring TIX API
+        const hasWSE = await getNsDataThroughFile(ns, `(() => { try { return ns.stock.hasWSEAccount(); } catch { return false; } })()`);
+        const hasTIX = await getNsDataThroughFile(ns, `(() => { try { return ns.stock.hasTixApiAccess(); } catch { return false; } })()`);
+        const player = await getPlayerInfo(ns);
+        return {
+            hasWSE,
+            hasTIX,
+            money: player.money,
+            timestamp: Date.now()
+        };
+    } catch (err) {
+        // If we can't even check, return minimal info
+        return { error: err?.message || String(err), timestamp: Date.now() };
+    }
+}
 
 /** @param {NS} ns **/
 async function initAllStocks(ns) {
@@ -309,11 +346,17 @@ async function refresh(ns, has4s, allStocks, myStocks) {
         if (Date.now() - lastTick < expectedTickTime - sleepInterval) {
             if (Date.now() - lastTick < catchUpTickTime - sleepInterval) {
                 let changedPrices = allStocks.filter(stk => stk.ask_price != dictAskPrices[stk.sym]);
-                log(ns, `WARNING: Detected a stock market tick after only ${formatDuration(Date.now() - lastTick)}, but expected ~${formatDuration(expectedTickTime)}. ` +
+                doLog(ns, `WARNING: Detected a stock market tick after only ${formatDuration(Date.now() - lastTick)}, but expected ~${formatDuration(expectedTickTime)}. ` +
                     (changedPrices.length >= 33 ? '(All stocks updated)' : `The following ${changedPrices.length} stock prices changed: ${changedPrices.map(stk =>
                         `${stk.sym} ${formatMoney(stk.ask_price)} -> ${formatMoney(dictAskPrices[stk.sym])}`).join(", ")}`), false, 'warning');
-            } else
-                log(ns, `INFO: Detected a rapid stock market tick (${formatDuration(Date.now() - lastTick)}), likely to make up for lag / offline time.`)
+            } else {
+                // Check if this is an offline tick (catch-up after being away)
+                const isOfflineTick = Date.now() - lastTick > expectedTickTime * 3;
+                if (!isOfflineTick && Date.now() - lastTick < expectedTickTime - sleepInterval) {
+                    // Only warn on genuine fast ticks (not catch-up ticks)
+                    doLog(ns, `INFO: Detected a rapid stock market tick (${formatDuration(Date.now() - lastTick)}), likely to make up for lag / offline time.`)
+                }
+            }
         }
         lastTick = Date.now()
     }
@@ -332,10 +375,10 @@ async function refresh(ns, has4s, allStocks, myStocks) {
         // Update our current portfolio of owned stock
         let [priorLong, priorShort] = [stk.sharesLong, stk.sharesShort];
         stk.position = mock ? null : dictPositions[sym];
-        stk.sharesLong = mock ? (stk.sharesLong || 0) : stk.position[0];
-        stk.boughtPrice = mock ? (stk.boughtPrice || 0) : stk.position[1];
-        stk.sharesShort = mock ? (stk.shares_short || 0) : stk.position[2];
-        stk.boughtPriceShort = mock ? (stk.boughtPrice_short || 0) : stk.position[3];
+        stk.sharesLong = mock ? (stk.sharesLong ?? 0) : stk.position[0];
+        stk.boughtPrice = mock ? (stk.boughtPrice ?? 0) : stk.position[1];
+        stk.sharesShort = mock ? (stk.shares_short ?? 0) : stk.position[2];
+        stk.boughtPriceShort = mock ? (stk.boughtPrice_short ?? 0) : stk.position[3];
         holdings += stk.positionValue();
         if (stk.owned()) myStocks.push(stk); else stk.ticksHeld = 0;
         if (ticked) // Increment ticksHeld, or reset it if we have no position in this stock or reversed our position last tick.
@@ -380,7 +423,7 @@ async function updateForecast(ns, allStocks, has4s) {
         if (inversionsDetected.length >= inversionAgreementThreshold && (has4s || currentHistory >= minTickHistory)) { // We believe we have detected the stock market cycle!
             const newPredictedCycleTick = has4s ? 0 : nearTermForecastWindowLength; // By the time we've detected it, we're this many ticks past the cycle start
             if (detectedCycleTick != newPredictedCycleTick)
-                log(ns, `Threshold for changing predicted market cycle met (${inversionsDetected.length} >= ${inversionAgreementThreshold}). ` +
+                doLog(ns, `Threshold for changing predicted market cycle met (${inversionsDetected.length} >= ${inversionAgreementThreshold}). ` +
                     `Changing current market tick from ${detectedCycleTick} to ${newPredictedCycleTick}.`);
             marketCycleDetected = true;
             detectedCycleTick = newPredictedCycleTick;
@@ -420,19 +463,25 @@ async function updateForecast(ns, allStocks, has4s) {
     if (prepSummary) {
         summary += `Market day ${detectedCycleTick + 1}${marketCycleDetected ? '' : '?'} of ${marketCycleLength} (${marketCycleDetected ? (100 * inversionAgreementThreshold / 19).toPrecision(2) : '0'}% certain) ` +
             `Current Stock Summary and Pre-4S Forecasts (by best payoff-time):\n` + allStocks.sort(purchaseOrder).map(s => s.debugLog).join("\n")
-        if (showMarketSummary) await updateForecastFile(ns, summary); else log(ns, summary);
+        if (showMarketSummary) await updateForecastFile(ns, summary); else doLog(ns, summary);
     }
     // Write out a file of stock probabilities so that other scripts can make use of this (e.g. hack orchestrator can manipulate the stock market)
-    await ns.write('/Temp/stock-probabilities.txt', JSON.stringify(Object.fromEntries(
-        allStocks.map(stk => [stk.sym, { prob: stk.prob, sharesLong: stk.sharesLong, sharesShort: stk.sharesShort }]))), "w");
+    // Note: daemon.js expects a flat object with stock symbols as keys, not wrapped in {timestamp, payload}
+    // Note: Errors are suppressed (silent=true) as this is non-critical temp data refreshed every tick. 
+    // If debugging write failures, change silent to false temporarily.
+    const marketData = Object.fromEntries(
+        allStocks.map(stk => [stk.sym, { prob: stk.prob, sharesLong: stk.sharesLong, sharesShort: stk.sharesShort }])
+    );
+    // Write stock probabilities for daemon.js to use for market manipulation (atomic write)
+    await safelyWriteData(ns, STOCK_PROBABILITIES_PATH, marketData, true);
 }
 
 // Helpers to display the stock market summary in a separate window.
-let summaryFile = '/Temp/stockmarket-summary.txt';
-let updateForecastFile = async (ns, summary) => await ns.write(summaryFile, summary, 'w');
+let summaryFile = STOCK_SUMMARY_PATH;
+let updateForecastFile = async (ns, summary) => await ns.write(summaryFile, summary, 'w') || await ns.write(summaryFile, summary, 'w') || await ns.write(summaryFile, summary, 'w');
 let launchSummaryTail = async ns => {
     let summaryTailScript = summaryFile.replace('.txt', '-tail.js');
-    if (await getNsDataThroughFile(ns, `ns.scriptRunning('${summaryTailScript}', ns.getHostname())`, '/Temp/stockmarket-summary-is-running.txt'))
+    if (await getNsDataThroughFile(ns, `ns.scriptRunning('${summaryTailScript}', ns.getHostname())`, `${STOCK_SUMMARY_PATH}-is-running.txt`))
         return;
     //await getNsDataThroughFile(ns, `ns.scriptKill('${summaryTailScript}', ns.getHostname())`, summaryTailScript.replace('.js', '-kill.js')); // Only needed if we're changing the script below
     await runCommand(ns, `ns.disableLog('sleep'); tail(ns); let lastRead = '';
@@ -460,21 +509,21 @@ async function doBuy(ns, stk, sharesToBuy) {
         totalProfit -= commission;
     let long = stk.bullish();
     let expectedPrice = long ? stk.ask_price : stk.bid_price; // Depends on whether we will be buying a long or short position
-    log(ns, `INFO: ${long ? 'Buying  ' : 'Shorting'} ${formatNumberShort(sharesToBuy, 3, 3).padStart(5)} (` +
+    doLog(ns, `INFO: ${long ? 'Buying  ' : 'Shorting'} ${formatNumberShort(sharesToBuy, 3, 3).padStart(5)} (` +
         `${stk.maxShares == sharesToBuy + stk.ownedShares() ? '@max shares' : `${formatNumberShort(sharesToBuy + stk.ownedShares(), 3, 3).padStart(5)}/${formatNumberShort(stk.maxShares, 3, 3).padStart(5)}`}) ` +
         `${stk.sym.padEnd(5)} @ ${formatMoney(expectedPrice).padStart(9)} for ${formatMoney(sharesToBuy * expectedPrice).padStart(9)} (Spread:${(stk.spread_pct * 100).toFixed(2)}% ` +
         `ER:${formatBP(stk.expectedReturn()).padStart(8)}) Ticks to Profit: ${stk.timeToCoverTheSpread().toFixed(2)}`, noisy, 'info');
-    let price = mock ? expectedPrice : Number(await transactStock(ns, stk.sym, sharesToBuy, long ? 'buyStock' : 'buyShort'));
+    let price = mock ? expectedPrice : Number(await transactStock(ns, stk.sym, sharesToBuy, long ? 'buyStock' : 'buyShort', [stk.sym, sharesToBuy]));
     // The rest of this work is for troubleshooting / mock-mode purposes
     if (price == 0) {
         const playerMoney = (await getPlayerInfo(ns)).money;
         if (playerMoney < sharesToBuy * expectedPrice)
-            log(ns, `WARN: Failed to ${long ? 'buy' : 'short'} ${stk.sym} because money just recently dropped to ${formatMoney(playerMoney)} and we can no longer afford it.`, noisy);
+            doLog(ns, `WARN: Failed to ${long ? 'buy' : 'short'} ${stk.sym} because money just recently dropped to ${formatMoney(playerMoney)} and we can no longer afford it.`, noisy);
         else
-            log(ns, `ERROR: Failed to ${long ? 'buy' : 'short'} ${stk.sym} @ ${formatMoney(expectedPrice)} (0 was returned) despite having ${formatMoney(playerMoney)}.`, true, 'error');
+            doLog(ns, `ERROR: Failed to ${long ? 'buy' : 'short'} ${stk.sym} @ ${formatMoney(expectedPrice)} (0 was returned) despite having ${formatMoney(playerMoney)}.`, true, 'error');
         return 0;
     } else if (price != expectedPrice) {
-        log(ns, `WARNING: ${long ? 'Bought' : 'Shorted'} ${stk.sym} @ ${formatMoney(price)} but expected ${formatMoney(expectedPrice)} (spread: ${formatMoney(stk.spread)})`, false, 'warning');
+        doLog(ns, `WARNING: ${long ? 'Bought' : 'Shorted'} ${stk.sym} @ ${formatMoney(price)} but expected ${formatMoney(expectedPrice)} (spread: ${formatMoney(stk.spread)})`, false, 'warning');
         price = expectedPrice; // Known Bitburner bug for now, short returns "price" instead of "bid_price". Correct this so running profit calcs are correct.
     }
     if (mock && long) stk.boughtPrice = (stk.boughtPrice * stk.sharesLong + price * sharesToBuy) / (stk.sharesLong + sharesToBuy);
@@ -488,19 +537,19 @@ async function doBuy(ns, stk, sharesToBuy) {
 async function doSellAll(ns, stk) {
     let long = stk.sharesLong > 0;
     if (long && stk.sharesShort > 0) // Detect any issues here - we should always sell one before buying the other.
-        log(ns, `ERROR: Somehow ended up both ${stk.sharesShort} short and ${stk.sharesLong} long on ${stk.sym}`, true, 'error');
+        doLog(ns, `ERROR: Somehow ended up both ${stk.sharesShort} short and ${stk.sharesLong} long on ${stk.sym}`, true, 'error');
     let expectedPrice = long ? stk.bid_price : stk.ask_price; // Depends on whether we will be selling a long or short position
     let sharesSold = long ? stk.sharesLong : stk.sharesShort;
-    let price = mock ? expectedPrice : await transactStock(ns, stk.sym, sharesSold, long ? 'sellStock' : 'sellShort');
+    let price = mock ? expectedPrice : Number(await transactStock(ns, stk.sym, sharesSold, long ? 'sellStock' : 'sellShort', [stk.sym, sharesSold]));
     const profit = (long ? stk.sharesLong * (price - stk.boughtPrice) : stk.sharesShort * (stk.boughtPriceShort - price)) - 2 * commission;
-    log(ns, `${profit > 0 ? 'SUCCESS' : 'WARNING'}: Sold all ${formatNumberShort(sharesSold, 3, 3).padStart(5)} ${stk.sym.padEnd(5)} ${long ? ' long' : 'short'} positions ` +
+    doLog(ns, `${profit > 0 ? 'SUCCESS' : 'WARNING'}: Sold all ${formatNumberShort(sharesSold, 3, 3).padStart(5)} ${stk.sym.padEnd(5)} ${long ? ' long' : 'short'} positions ` +
         `@ ${formatMoney(price).padStart(9)} for a ` + (profit > 0 ? `PROFIT of ${formatMoney(profit).padStart(9)}` : ` LOSS  of ${formatMoney(-profit).padStart(9)}`) + ` after ${stk.ticksHeld} ticks`,
         noisy, noisy ? (profit > 0 ? 'success' : 'error') : undefined);
     if (price == 0) {
-        log(ns, `ERROR: Failed to sell ${sharesSold} ${stk.sym} ${long ? 'shares' : 'shorts'} @ ${formatMoney(expectedPrice)} - 0 was returned.`, true, 'error');
+        doLog(ns, `ERROR: Failed to sell ${sharesSold} ${stk.sym} ${long ? 'shares' : 'shorts'} @ ${formatMoney(expectedPrice)} - 0 was returned.`, true, 'error');
         return 0;
     } else if (price != expectedPrice) {
-        log(ns, `WARNING: Sold ${stk.sym} ${long ? 'shares' : 'shorts'} @ ${formatMoney(price)} but expected ${formatMoney(expectedPrice)} (spread: ${formatMoney(stk.spread)})`, false, 'warning');
+        doLog(ns, `WARNING: Sold ${stk.sym} ${long ? 'shares' : 'shorts'} @ ${formatMoney(price)} but expected ${formatMoney(expectedPrice)} (spread: ${formatMoney(stk.spread)})`, false, 'warning');
         price = expectedPrice; // Known Bitburner bug for now, sellSort returns "price" instead of "ask_price". Correct this so running profit calcs are correct.
     }
     if (long) stk.sharesLong -= sharesSold; else stk.sharesShort -= sharesSold; // Maintained for mock mode, otherwise, redundant (overwritten at next refresh)
@@ -512,7 +561,7 @@ let formatBP = fraction => formatNumberShort(fraction * 100 * 100, 3, 2) + " B
 
 /** Log / tprint / toast helper.
  * @param {NS} ns */
-let log = (ns, message, tprint = false, toastStyle = "") => {
+let doLog = (ns, message, tprint = false, toastStyle = "") => {
     if (message == lastLog) return;
     ns.print(message);
     if (tprint) ns.tprint(message);
@@ -530,7 +579,7 @@ function doStatusUpdate(ns, stocks, myStocks, hudElement = null) {
         (myStocks.length == 0 ? '' : `(ER ${minReturnBP.toFixed(1)}-${maxReturnBP.toFixed(1)} BP) `) +
         `Profit: ${formatMoney(totalProfit, 3)} Holdings: ${formatMoney(liquidation_value, 3)} (Cost: ${formatMoney(est_holdings_cost, 3)}) ` +
         `Net: ${formatMoney(totalProfit + liquidation_value - est_holdings_cost, 3)}`
-    log(ns, status);
+    doLog(ns, status);
     if (hudElement) hudElement.innerText = formatMoney(liquidation_value, 6, 3);
 }
 
@@ -544,10 +593,10 @@ async function liquidate(ns) {
         var [sharesLong, , sharesShort, avgShortCost] = dictPositions[sym];
         if (sharesLong + sharesShort == 0) continue;
         totalStocks++, totalSharesLong += sharesLong, totalSharesShort += sharesShort;
-        if (sharesLong > 0) totalRevenue += (await sellStockWrapper(ns, sym, sharesLong)) * sharesLong - commission;
-        if (sharesShort > 0) totalRevenue += (2 * avgShortCost - (await sellShortWrapper(ns, sym, sharesShort))) * sharesShort - commission;
+        if (sharesLong > 0) totalRevenue += (await transactStock(ns, sym, sharesLong, 'sellStock', [sym, sharesLong])) * sharesLong - commission;
+        if (sharesShort > 0) totalRevenue += (2 * avgShortCost - (await transactStock(ns, sym, sharesShort, 'sellShort', [sym, sharesShort]))) * sharesShort - commission;
     }
-    log(ns, `Sold ${totalSharesLong.toLocaleString('en')} long shares and ${totalSharesShort.toLocaleString('en')} short shares ` +
+    doLog(ns, `Sold ${totalSharesLong.toLocaleString('en')} long shares and ${totalSharesShort.toLocaleString('en')} short shares ` +
         `in ${totalStocks} stocks for ${formatMoney(totalRevenue, 3)}`, true, 'success');
 }
 
@@ -566,17 +615,17 @@ async function tryGet4SApi(ns, playerStats, budget) {
         await liquidate(ns);
     if (!has4S) {
         if (await tryBuy(ns, 'purchase4SMarketData'))
-            log(ns, `SUCCESS: Purchased 4SMarketData for ${formatMoney(cost4sData)} ` +
+            doLog(ns, `SUCCESS: Purchased 4SMarketData for ${formatMoney(cost4sData)} ` +
                 `(At ${formatDuration(getTimeInBitnode())} into BitNode)`, true, 'success');
         else
-            log(ns, 'ERROR attempting to purchase 4SMarketData!', false, 'error');
+            doLog(ns, 'ERROR attempting to purchase 4SMarketData!', false, 'error');
     }
     if (await tryBuy(ns, 'purchase4SMarketDataTixApi')) {
-        log(ns, `SUCCESS: Purchased 4SMarketDataTixApi for ${formatMoney(cost4sApi)} ` +
+        doLog(ns, `SUCCESS: Purchased 4SMarketDataTixApi for ${formatMoney(cost4sApi)} ` +
             `(At ${formatDuration(getTimeInBitnode())} into BitNode)`, true, 'success');
         return true;
     } else {
-        log(ns, 'ERROR attempting to purchase 4SMarketDataTixApi!', false, 'error');
+        doLog(ns, 'ERROR attempting to purchase 4SMarketDataTixApi!', false, 'error');
     }
     return false;
 }
@@ -585,7 +634,7 @@ async function tryGet4SApi(ns, playerStats, budget) {
  * @param {"hasWseAccount"|"hasTixApiAccess"|"has4SData"|"has4SDataTixApi"} stockFn
  * Helper to check for one of the stock access functions */
 async function checkAccess(ns, stockFn) {
-    return await getNsDataThroughFile(ns, `ns.stock.${stockFn}()`)
+    return await getNsDataThroughFile(ns, `(() => { try { return ns.stock.${stockFn}(); } catch { return false; } })()`)
 }
 
 /** @param {NS} ns
@@ -607,17 +656,17 @@ async function tryGetStockMarketAccess(ns, budget) {
     if (totalCost > budget) return false;
     if (!hasWSE) {
         if (await tryBuy(ns, 'purchaseWseAccount'))
-            log(ns, `SUCCESS: Purchased a WSE (stockmarket) account for ${formatMoney(costWseAccount)} ` +
+            doLog(ns, `SUCCESS: Purchased a WSE (stockmarket) account for ${formatMoney(costWseAccount)} ` +
                 `(At ${formatDuration(getTimeInBitnode())} into BitNode)`, true, 'success');
         else
-            log(ns, 'ERROR attempting to purchase WSE account!', false, 'error');
+            doLog(ns, 'ERROR attempting to purchase WSE account!', false, 'error');
     }
     if (await tryBuy(ns, 'purchaseTixApi')) {
-        log(ns, `SUCCESS: Purchased Tix (stockmarket) Api access for ${formatMoney(costTixApi)} ` +
+        doLog(ns, `SUCCESS: Purchased Tix (stockmarket) Api access for ${formatMoney(costTixApi)} ` +
             `(At ${formatDuration(getTimeInBitnode())} into BitNode)`, true, 'success');
         return true;
     } else
-        log(ns, 'ERROR attempting to purchase Tix Api!', false, 'error');
+        doLog(ns, 'ERROR attempting to purchase Tix Api!', false, 'error');
     return false;
 }
 

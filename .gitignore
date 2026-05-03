@@ -2,3 +2,6 @@
 *.txt
 .vscode/*.*
 *.ts
+
+API.md
+CORP_REFERENCE.md

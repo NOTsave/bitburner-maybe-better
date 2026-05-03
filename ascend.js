@@ -1,7 +1,9 @@
 import {
-    log, getConfiguration, getFilePath, runCommand, waitForProcessToComplete, getNsDataThroughFile,
-    getActiveSourceFiles, getStockSymbols
+    log, getConfiguration, instanceCount, getNsDataThroughFile, runCommand, waitForProcessToComplete,
+    getActiveSourceFiles, tryGetBitNodeMultipliers, getStocksValue, unEscapeArrayArgs,
+    formatMoney, formatDuration, formatNumber, getErrorInfo, tail, jsonReplacer, getFilePath, DEFAULT_CORP_DATA_PATH, getCachedCorpData, TIMEOUT, getStockSymbols
 } from './helpers.js'
+import { maximizeDividends } from './Corp/corp-dividend-manager.js'
 
 const argsSchema = [
     ['install-augmentations', false], // By default, augs will only be purchased. Set this flag to install (a.k.a reset)
@@ -54,7 +56,7 @@ export async function main(ns) {
     if (!pid) log(ns, 'WARNING: Failed to start spend-hacknet-hashes.js', false, 'warning');
 
     // If we do not have tix api access, we cannot automate checking on or selling stocks, so skip this
-    const hasTixApiAccess = await getNsDataThroughFile(ns, `ns.stock.hasTixApiAccess()`);
+    const hasTixApiAccess = await getNsDataThroughFile(ns, `(() => { try { return ns.stock.hasTixApiAccess(); } catch { return false; } })()`);
     if (hasTixApiAccess) {
         const stkSymbols = await getStockSymbols(ns);
         const countOwnedStocks = async () => await getNsDataThroughFile(ns, `ns.args.map(sym => ns.stock.getPosition(sym))` +
@@ -159,6 +161,19 @@ export async function main(ns) {
     if (invites.length > 0) {
         pid = await runCommand(ns, 'ns.args.forEach(f => ns.singularity.joinFaction(f))', '/Temp/join-factions.js', invites);
         await waitForProcessToComplete(ns, pid, true);
+    }
+
+    // STEP 9.5: Ensure corporation dividends are at 100% to capture final payouts
+    // (autopilot.js should have already done this, but we ensure it here as a safeguard)
+    try {
+        const hasCorp = await getNsDataThroughFile(ns, 'ns.corporation.hasCorporation()');
+        if (hasCorp) {
+            log(ns, 'Finalizing Corporation payouts...', false, 'info');
+            await maximizeDividends(ns, 'Final ascension payout - ensuring maximum dividend capture');
+            await ns.sleep(TIMEOUT); // Use standardized timeout constant
+        }
+    } catch {
+        // No corporation or API error - continue without blocking
     }
 
     // STEP 10: WAIT: For money to stop decreasing, so we know that external scripts have bought what they could.

@@ -39,20 +39,119 @@ export function parseShortNumber(text = "0") {
     return Number.NaN;
 }
 
+// Standardized timing constants
+export const TICK_RATE = 2000;
+export const TIMEOUT = 1000;
+export const CACHE_TTL = 5000;
+
+// Standardized Log Wrapper
+export function sysLog(ns, msg, type = 'info') {
+    const prefix = `[${new Date().toLocaleTimeString()}]`;
+    log(ns, `${prefix} ${msg}`, false, type);
+}
+
+// Centralized Faction Data - Single source of truth for all faction-related operations
+export const FACTION_DATA = {
+    // All factions in the game (complete master list)
+    ALL_FACTIONS: [
+        "Illuminati", "Daedalus", "The Covenant", "ECorp", "MegaCorp", "Bachman & Associates", "Blade Industries", 
+        "NWO", "Clarke Incorporated", "OmniTek Incorporated", "Four Sigma", "KuaiGong International", 
+        "Fulcrum Secret Technologies", "BitRunners", "The Black Hand", "NiteSec", "Aevum", "Chongqing", 
+        "Ishima", "New Tokyo", "Sector-12", "Volhaven", "Speakers for the Dead", "The Dark Army", 
+        "The Syndicate", "Silhouette", "Tetrads", "Slum Snakes", "Netburners", "Tian Di Hui", 
+        "CyberSec", "Bladeburners", "Church of the Machine God", "Shadows of Anarchy"
+    ],
+    
+    // Factions that cannot receive reputation donations
+    NO_DONATION_FACTIONS: ["Bladeburners", "Church of the Machine God", "Shadows of Anarchy"],
+    
+    // Factions that cannot be worked for directly
+    CANNOT_WORK_FOR: ["Church of the Machine God", "Bladeburners", "Shadows of Anarchy"],
+    
+    // Easy access factions (always shown even with --hide-locked-factions)
+    EASY_ACCESS: [
+        "Tian Di Hui", "Sector-12", "Chongqing", "New Tokyo", "Ishima", "Aevum", "Volhaven", // Location-Based
+        "BitRunners", "CyberSec", "NiteSec", "Netburners", "Slum Snakes", "Tetrads" // Early Crime
+    ],
+    
+    // Potential gang factions (joined when nearing -54K Karma)
+    POTENTIAL_GANG_FACTIONS: ["Slum Snakes", "Tetrads", "The Black Hand", "The Syndicate", "The Dark Army", "Speakers for the Dead"],
+    
+    // Preferred early faction order (priority sequence)
+    PREFERRED_EARLY_ORDER: [
+        "Netburners", // Improve hash income
+        "Tian Di Hui", "Aevum", // Company/faction rep bonuses early game
+        "Daedalus", // Red Pill target
+        "CyberSec", "NiteSec", // Easy hacking factions
+        "BitRunners", // Good augments
+        "The Black Hand", // Good combat augs
+        "Tetrads", "Slum Snakes", // Crime factions
+        "Speakers for the Dead", "The Dark Army", // Gang factions
+        "The Syndicate", "The Covenant", // Late-game factions
+        "ECorp", "MegaCorp", "Bachman & Associates", // Company factions
+        "Clarke Incorporated", "OmniTek Incorporated", "Four Sigma", "KuaiGong International", // More companies
+        "Fulcrum Secret Technologies", "Blade Industries", "NWO" // Endgame factions
+    ],
+    
+    // Preferred company faction order (for rep grinding)
+    PREFERRED_COMPANY_ORDER: [
+        "Bachman & Associates", // Company rep boost
+        "ECorp", // Major hacking boosts
+        "Clarke Incorporated", // Hacking boost
+        "OmniTek Incorporated", // Good balance
+        "Fulcrum Secret Technologies", // Late-game company
+        "Blade Industries", "NWO", "Four Sigma", "KuaiGong International" // More companies
+    ],
+    
+    // Preferred crime faction order
+    PREFERRED_CRIME_ORDER: ["Slum Snakes", "Tetrads", "Speakers for the Dead", "The Syndicate", "The Dark Army", "The Covenant", "Daedalus", "Netburners", "NiteSec", "The Black Hand"],
+    
+    // All gang factions
+    ALL_GANG_FACTIONS: ["Speakers for the Dead", "The Dark Army", "The Syndicate", "Tetrads", "Slum Snakes", "The Black Hand", "NiteSec"],
+    
+    // Default desired augmentations (always marked as desired)
+    DEFAULT_DESIRED_AUGS: ["The Red Pill", "The Blade's Simulacrum", "Neuroreceptor Management Implant", "CashRoot Starter Kit"],
+    
+    // Default hidden stats (not shown in summary)
+    DEFAULT_HIDDEN_STATS: ['bladeburner', 'hacknet']
+};
+
 /**
- * Return a number formatted with the specified number of significant figures or decimal places, whichever is more limiting.
+ * Return a number formatted with specified number of significant figures or decimal places, whichever is more limiting.
+ * Uses ns.formatNumber when available (v3.x), falls back to custom implementation for v2.x compatibility
+ * @param {NS} ns - Netscript instance for API access
  * @param {number} num - The number to format
- * @param {number=} minSignificantFigures - (default: 6) The minimum significant figures you wish to see (e.g. 123, 12.3 and 1.23 all have 3 significant figures)
+ * @param {number=} minSignificantFigures - (default: 6) The minimum significant figures you wish to see (e.g. 123, 12.3 and1.23 all have 3 significant figures)
  * @param {number=} minDecimalPlaces - (default: 3) The minimum decimal places you wish to see, regardless of significant figures. (e.g. 12.3, 1.2, 0.1 all have 1 decimal)
  **/
-export function formatNumber(num, minSignificantFigures = 3, minDecimalPlaces = 1) {
+export function formatNumber(ns, num, minSignificantFigures = 3, minDecimalPlaces = 1) {
+    // Try to use ns.format.number (v3.x API) first
+    if (ns && ns.format && typeof ns.format.number === 'function') {
+        try {
+            return ns.format.number(num, minSignificantFigures, minDecimalPlaces);
+        } catch (e) {
+            // Fall back to custom implementation if ns.format.number fails
+        }
+    }
+    
+    // Fallback implementation for v2.x compatibility
     return num == 0.0 ? "0" : num.toFixed(Math.max(minDecimalPlaces, Math.max(0, minSignificantFigures - Math.ceil(Math.log10(num)))));
 }
 
 const memorySuffixes = ["GB", "TB", "PB", "EB"];
 
 /** Formats some RAM amount as a round number of GB/TB/PB/EB with thousands separators e.g. `1.028 TB` */
-export function formatRam(num, printGB) {
+export function formatRam(ns, num, printGB) {
+    // Try to use ns.format.ram (v3.x API) first
+    if (ns && ns.format && typeof ns.format.ram === 'function') {
+        try {
+            return ns.format.ram(num);
+        } catch (e) {
+            // Fall back to custom implementation if ns.format.ram fails
+        }
+    }
+    
+    // Fallback implementation for v2.x compatibility
     if (printGB) {
         return `${Math.round(num).toLocaleString('en')} GB`;
     }
@@ -64,8 +163,48 @@ export function formatRam(num, printGB) {
     }
     const scaled = num / 1000 ** idx; // Scale the number to the order of magnitude chosen
     // Only display decimal places if there are any
-    const formatted = scaled - Math.round(scaled) == 0 ? Math.round(scaled) : formatNumber(num / 1000 ** idx);
+    const formatted = scaled - Math.round(scaled) == 0 ? Math.round(scaled) : formatNumber(ns, num / 1000 ** idx);
     return formatted.toLocaleString('en') + " " + memorySuffixes[idx];
+}
+
+/** Formats a number as a percentage with specified precision
+ * Uses ns.formatPercent when available (v3.x), falls back to custom implementation for v2.x compatibility
+ * @param {NS} ns - Netscript instance for API access
+ * @param {number} num - The number to format as percentage
+ * @param {number=} decimalPlaces - (default: 1) Number of decimal places
+ **/
+export function formatPercent(ns, num, decimalPlaces = 1) {
+    // Try to use ns.format.percent (v3.x API) first
+    if (ns && ns.format && typeof ns.format.percent === 'function') {
+        try {
+            return ns.format.percent(num, decimalPlaces);
+        } catch (e) {
+            // Fall back to custom implementation if ns.format.percent fails
+        }
+    }
+    
+    // Fallback implementation for v2.x compatibility
+    return `${(num * 100).toFixed(decimalPlaces)}%`;
+}
+
+/** Formats time duration using ns.format API
+ * Uses ns.formatTime when available (v3.x), falls back to custom implementation for v2.x compatibility
+ * @param {NS} ns - Netscript instance for API access
+ * @param {number} milliseconds - Time in milliseconds to format
+ * @param {number=} milliPrecision - (default: 0) Millisecond precision
+ **/
+export function tFormat(ns, milliseconds, milliPrecision = 0) {
+    // Try to use ns.formatTime (v3.x API) first
+    if (ns && typeof ns.formatTime === 'function') {
+        try {
+            return ns.formatTime(milliseconds, milliPrecision);
+        } catch (e) {
+            // Fall back to custom implementation if ns.formatTime fails
+        }
+    }
+    
+    // Fallback implementation for v2.x compatibility
+    return formatDuration(milliseconds);
 }
 
 /** Return a datatime in ISO format */
@@ -183,7 +322,11 @@ function checkBackwardsCompatibility(ns, command) {
         .replaceAll("cloud.deleteServer", "deleteServer")
         .replaceAll("cloud.getServerNames", "getPurchasedServers")
         .replaceAll("cloud.getServerLimit", "getPurchasedServerLimit")
-        .replaceAll("cloud.getRamLimit", "getPurchasedServerMaxRam");
+        .replaceAll("cloud.getRamLimit", "getPurchasedServerMaxRam")
+        // Post-Steam update Corporation API changes
+        .replaceAll("ns.corporation.setJobAssignment", "ns.corporation.assignJob")  // setJobAssignment renamed
+        .replaceAll("ns.corporation.expandIndustry", "ns.corporation.expandIndustry") // Check signature changes
+        .replaceAll("ns.corporation.getCorporation()", "ns.corporation.getCorporation()"); // Handle field changes
 
     // Log altered commands to assist with troubleshooting.
     if (alteredCommand != command)
@@ -200,6 +343,18 @@ function checkBackwardsCompatibility(ns, command) {
                 if (!excludeProperties.includes(key))
                    pCopy[key] = player[key];
                 return pCopy;
+            }, {});
+        })()`;
+
+    // Workaround for v2.x deprecations: .state replaced with .nextState in Corporation API
+    // Avoid serializing deprecated .state property from getCorporation()
+    if (command === "ns.corporation.getCorporation()")
+        alteredCommand = `( ()=> { let corp = ns.corporation.getCorporation();
+            const excludeProperties = ['state'];
+            return Object.keys(corp).reduce((cCopy, key) => {
+                if (!excludeProperties.includes(key))
+                   cCopy[key] = corp[key];
+                return cCopy;
             }, {});
         })()`;
 
@@ -261,7 +416,11 @@ export async function getNsDataThroughFile_Custom(ns, fnRun, command, fName = nu
     // Run the command with auto-retries if it fails
     const pid = await runCommand_Custom(ns, fnRun, commandToFile, fNameCommand, args, verbose, maxRetries, retryDelayMs, silent);
     // Wait for the process to complete. Note, as long as the above returned a pid, we don't actually have to check it, just the file contents
-    const fnIsAlive = (ignored_pid) => ns.read(fName) === initialContents;
+    // Fix: Also treat empty string (deleted file) as "still running" to avoid race condition with cleanup scripts
+    const fnIsAlive = (ignored_pid) => {
+        const contents = ns.read(fName);
+        return contents === initialContents || contents === "";
+    };
     await waitForProcessToComplete_Custom(ns, fnIsAlive, pid, verbose);
     if (verbose) log(ns, `Process ${pid} is done. Reading the contents of ${fName}...`);
     // Read the file, with auto-retries if it fails // TODO: Unsure reading a file can fail or needs retrying.
@@ -376,8 +535,7 @@ export async function runCommand_Custom(ns, fnRun, command, fileName, args = [],
         if (oldContents != script) {
             if (oldContents) // Create some noise if temp scripts are being created with the same name but different contents
                 ns.tprint(`WARNING: Had to overwrite temp script ${fileName}\nOld Contents:\n${oldContents}\nNew Contents:\n${script}` +
-                    `\nThis warning is generated as part of an effort to switch over to using only 'immutable' temp scripts. ` +
-                    `Please paste a screenshot in Discord at https://discord.com/channels/415207508303544321/935667531111342200`);
+                    `\n(This warning appears when temp scripts with the same name but different contents are being created)`);
             ns.write(fileName, script, "w");
             // Wait for the script to appear and be readable (game can be finicky on actually completing the write)
             await autoRetry(ns, () => ns.read(fileName), c => c == script, () => `Temporary script ${fileName} is not available, ` +
@@ -470,7 +628,7 @@ export async function autoRetry(ns, fnFunctionThatMayFail, fnSuccessCondition, e
     if (verbose == null) verbose = false; if (tprintFatalErrors == null) tprintFatalErrors = true; if (silent == null) silent = false;
     checkNsInstance(ns, '"autoRetry"');
     let retryDelayMs = initialRetryDelayMs, attempts = 0;
-    let sucessConditionMet;
+    let successConditionMet;
     while (attempts++ <= maxRetries) {
         // Sleep between attempts
         if (attempts > 1) {
@@ -478,13 +636,13 @@ export async function autoRetry(ns, fnFunctionThatMayFail, fnSuccessCondition, e
             retryDelayMs *= backoffRate;
         }
         try {
-            sucessConditionMet = true;
+            successConditionMet = true;
             const result = await fnFunctionThatMayFail()
             // Check if this is considered a successful result
-            sucessConditionMet = fnSuccessCondition(result);
-            if (sucessConditionMet instanceof Promise)
-                sucessConditionMet = await sucessConditionMet; // If fnSuccessCondition was async, await its result
-            if (!sucessConditionMet) {
+            successConditionMet = fnSuccessCondition(result);
+            if (successConditionMet instanceof Promise)
+                successConditionMet = await successConditionMet; // If fnSuccessCondition was async, await its result
+            if (!successConditionMet) {
                 // If we have not yet reached our maximum number of retries, we can continue, without throwing
                 if (attempts < maxRetries) {
                     if (!silent) log(ns, `INFO: Attempt ${attempts} of ${maxRetries} failed. Trying again in ${retryDelayMs}ms...`, false, !verbose ? undefined : 'info');
@@ -953,8 +1111,289 @@ function isV3(ns) {
 }
 
 export function formatTime(ns, milliseconds, milliPrecision) {
+    // v3.x: ns.format.time() replaces ns.tFormat()
     if (isV3(ns)) {
-        return ns.ui.time(milliseconds, milliPrecision);
+        return ns.format?.time(milliseconds, milliPrecision) ?? ns.ui.time(milliseconds, milliPrecision);
     }
-    return ns.tFormat(milliseconds, milliPrecision);
+    return ns.tFormat?.(milliseconds, milliPrecision) ?? ns.ui.time(milliseconds, milliPrecision);
+}
+
+/** Format a number using ns.format (v3.x) or string formatting (v2.x fallback)
+ * @param {NS} ns
+ * @param {number} num - The number to format
+ * @param {string} [formatType='number'] - 'number', 'ram', or 'percent'
+ * @returns {string} */
+export function formatWithNs(ns, num, formatType = 'number') {
+    if (isV3(ns) && ns.format) {
+        switch (formatType) {
+            case 'ram': return ns.format.ram(num);
+            case 'percent': return ns.format.percent(num);
+            default: return ns.format.number(num);
+        }
+    }
+    // v2.x fallback
+    return String(num);
+}
+
+/** @param {NS} ns 
+ * @returns {number} Current script's RAM usage */
+export function calculateRamUsage(ns) {
+    const script = ns.getRunningScript();
+    return script.ramUsage * script.threads;
+}
+
+/** @param {NS} ns 
+ * @returns {ProcessInfo[]} Array of running corp-related modules */
+export function getRunningModules(ns) {
+    return ns.ps().filter(p => 
+        p.filename.includes('corp-') && p.pid !== ns.pid
+    );
+}
+
+// Corporation Data Caching - Single Source of Truth Pattern
+// Used by corp-manager, corp-hr, corp-logistics, corp-products, corp-research, corp-stocks
+export const DEFAULT_CORP_DATA_PATH = '/Temp/corp-data.json';
+export const MAX_CACHE_SIZE = 5 * 1024 * 1024; // 5MB limit
+
+// Tiered TTL system for different data types
+const TTL_CONFIG = {
+    'corp': 10000,   // 10s (Corp data is heavy/slow)
+    'stocks': 2000,  // 2s (Stocks move fast)
+    'default': 5000  // 5s
+};
+
+// Generic Temp Path for non-corporate data
+export const GENERIC_TEMP_PATH = '/Temp/gen-';
+
+// Jittered timing to prevent IO collisions in high-load environments
+export const JITTER_BASE = 2000;
+export const JITTER_VARIANCE = 500;
+
+/** Provides a staggered sleep to prevent IO collisions */
+export const getJitteredSleep = () => JITTER_BASE + (Math.random() * JITTER_VARIANCE);
+
+/** Atomic staging for high-load environments to prevent file corruption */
+export const getAtomicPath = (baseName) => `${GENERIC_TEMP_PATH}${baseName}.json`;
+export const getTempPath = (baseName) => `${GENERIC_TEMP_PATH}${baseName}`;
+
+// Business Logic Data Paths - Standardized for Chain Architecture
+export const FACTION_DATA_PATH = '/Temp/faction-data.json';
+export const AUGMENTATION_DATA_PATH = '/Temp/augmentation-data.json';
+export const COMPANY_DATA_PATH = '/Temp/company-data.json';
+export const HACKNET_DATA_PATH = '/Temp/hacknet-data.json';
+export const GANG_DATA_PATH = '/Temp/gang-data.json';
+export const STOCK_DATA_PATH = '/Temp/stock-data.json';
+export const STOCK_PROBABILITIES_PATH = '/Temp/stock-probabilities.txt';
+/**
+ * Optimized cache reader with tiered TTL system
+ * @param {NS} ns 
+ * @param {string} path 
+ * @param {string} type - Cache type for TTL selection
+ * @returns {object|null} Cached data or null if invalid/expired
+ */
+export function getCachedCorpData(ns, path = DEFAULT_CORP_DATA_PATH, type = 'corp') {
+    if (!ns.fileExists(path)) return null;
+    
+    try {
+        const content = ns.read(path);
+        
+        // Validate content is not empty or corrupted
+        if (!content || typeof content !== 'string' || content.trim().length === 0) {
+            return null;
+        }
+        
+        // Check size limits
+        if (content.length > MAX_CACHE_SIZE) {
+            log(ns, `WARN: Cache file ${path} exceeds size limit (${content.length} > ${MAX_CACHE_SIZE})`, false, 'warning');
+            return null;
+        }
+
+        const wrapper = safeParseJSON(content);
+        if (!wrapper) {
+            log(ns, `WARN: Cache file ${path} contains invalid JSON`, false, 'warning');
+            return null;
+        }
+        
+        // Ensure we are looking at our standardized wrapper format
+        if (!wrapper || typeof wrapper !== 'object' || !wrapper.payload || !wrapper.timestamp) {
+            log(ns, `WARN: Cache file ${path} has invalid wrapper format`, false, 'warning');
+            return null;
+        }
+        
+        // Validate timestamp is reasonable
+        if (typeof wrapper.timestamp !== 'number' || wrapper.timestamp <= 0) {
+            log(ns, `WARN: Cache file ${path} has invalid timestamp`, false, 'warning');
+            return null;
+        }
+        
+        const ttl = TTL_CONFIG[type] || TTL_CONFIG.default;
+        if (Date.now() - wrapper.timestamp > ttl) {
+            log(ns, `INFO: Cache file ${path} expired (${Date.now() - wrapper.timestamp}ms > ${ttl}ms)`, false, 'info');
+            return null;
+        }
+        
+        // Validate payload structure
+        if (typeof wrapper.payload !== 'object') {
+            log(ns, `WARN: Cache file ${path} has invalid payload structure`, false, 'warning');
+            return null;
+        }
+        
+        return wrapper.payload;
+    } catch (error) {
+        log(ns, `ERROR: Failed to read cache file ${path}: ${error.message || error}`, false, 'error');
+        return null;
+    }
+}
+
+
+
+/**
+ * Standardized error handling for corporation modules
+ * @param {NS} ns The nestscript instance
+ * @param {string} moduleName Name of the module where error occurred
+ * @param {Error|string} error The error that occurred
+ * @param {string} context Additional context about the operation
+ * @param {boolean} critical Whether this is a critical error that should stop execution
+ */
+export function handleCorpError(ns, moduleName, error, context = '', critical = false) {
+    checkNsInstance(ns, '"handleCorpError"');
+    const errorStr = error?.message || error || 'Unknown error';
+    const logLevel = critical ? 'error' : 'warning';
+    const message = context ? `${moduleName} ${context}: ${errorStr}` : `${moduleName}: ${errorStr}`;
+    
+    log(ns, `ERROR: ${message}`, critical, logLevel);
+    
+    // For critical errors, we might want to take additional action
+    if (critical) {
+        // Could add logic to notify admins or trigger emergency procedures
+        ns.print(`CRITICAL ERROR in ${moduleName}: ${errorStr}`);
+    }
+}
+
+/**
+ * Safe wrapper for corporation operations with standardized error handling
+ * @param {NS} ns The nestcript instance
+ * @param {string} moduleName Name of the module for error reporting
+ * @param {Function} operation The async operation to perform
+ * @param {string} context Context description for the operation
+ * @param {*} fallback Value to return if operation fails
+ * @returns {Promise<*>} Result of operation or fallback
+ */
+export async function safeCorpOperation(ns, moduleName, operation, context = '', fallback = null) {
+    try {
+        return await operation();
+    } catch (error) {
+        handleCorpError(ns, moduleName, error, context);
+        return fallback;
+    }
+}
+
+/**
+ * @param {Corporation} corp
+ * @param {string} type - e.g., 'Tobacco' or 'Agriculture'
+ * @returns {Division}
+ */
+/**
+ * Optimized for Bitburner: Basic JSON validity check to prevent script crashes
+ * @param {string} content 
+ * @returns {object|null} Parsed JSON or null if invalid
+ */
+export function safeParseJSON(content) {
+    try {
+        return JSON.parse(content);
+    } catch (e) {
+        // If file is garbled, just return null so the 
+        // calling script can wait for the next clean write.
+        return null;
+    }
+}
+
+/**
+ * Atomic file write with verification to prevent data loss
+ * @param {NS} ns The Netscript instance
+ * @param {string} path Target file path
+ * @param {object} data Data to write
+ * @param {boolean} [silent=false] If true, suppress error logging (for non-critical writes)
+ * @returns {Promise<boolean>} Success status
+ */
+export async function safelyWriteData(ns, path, data, silent = false) {
+    try {
+        // Validate input data
+        if (!data || typeof data !== 'object') {
+            throw new Error('Invalid data: must be an object');
+        }
+        
+        const wrapper = {
+            timestamp: Date.now(),
+            payload: data
+        };
+        
+        const serialized = JSON.stringify(wrapper);
+        
+        // Size validation
+        if (serialized.length > MAX_CACHE_SIZE) {
+            throw new Error(`Data too large: ${serialized.length} bytes`);
+        }
+        
+        // Write and ignore return value - Bitburner's ns.write can return false even on success
+        await ns.write(path, serialized, 'w');
+        
+        // Verify by reading back
+        const readBack = ns.read(path);
+        if (readBack !== serialized) {
+            throw new Error(`Write verification failed: wrote ${serialized.length}, read ${readBack.length}`);
+        }
+        
+        return true;
+    } catch (error) {
+        if (!silent) {
+            log(ns, `ERROR: safelyWriteData failed for ${path}: ${error.message || error}`, false, 'error');
+        }
+        return false;
+    }
+}
+
+export function getDivisionByType(corp, type) {
+    if (!corp || !corp.divisions) {
+        throw new Error("Invalid Corporation object provided to helper.");
+    }
+    const div = corp.divisions.find(d => d.type === type);
+    if (!div) {
+        throw new Error(`Required division type ${type} not found in Corporation.`);
+    }
+    return div;
+}
+
+/**
+ * Validates if a division object has the required structure
+ * @param {Division} div - Division object to validate
+ * @returns {boolean} True if valid, false otherwise
+ */
+export function isDivisionValid(div) {
+    return div && typeof div === 'object' && typeof div.name === 'string';
+}
+
+/**
+ * Gets the Tobacco division from corporation data (uses 'Tobacco' type)
+ * @param {Corporation} corp - Corporation data object
+ * @returns {Division|null} Tobacco division or null if not found
+ */
+export function getTobaccoDivision(corp) {
+    if (!corp || !corp.divisions || !Array.isArray(corp.divisions)) {
+        return null;
+    }
+    return corp.divisions.find(d => d.type === 'Tobacco') || null;
+}
+
+/**
+ * Cross-platform sleep helper - uses ns.asleep() for Web (background tab friendly),
+ * falls back to ns.sleep() for compatibility
+ * @param {NS} ns - Netscript instance
+ * @param {number} ms - Milliseconds to sleep
+ */
+export async function asleep(ns, ms) {
+    if (ns.asleep) {
+        return await ns.asleep(ms);
+    }
+    return await ns.sleep(ms);
 }

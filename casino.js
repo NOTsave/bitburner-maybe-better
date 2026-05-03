@@ -3,15 +3,17 @@ import {
     runCommand, getNsDataThroughFile, formatMoney, getErrorInfo, tail
 } from './helpers.js'
 
+const CASINO_DONE_FILE = "/Flags/autopilot-casino-done.txt"; // Persisted flag, outside /Temp/ to avoid cleanup
+
 const argsSchema = [
-    ['save-sleep-time', 10], // Time to sleep in milliseconds before and after saving. If you are having trouble with your automatic saves not "taking effect" try increasing this.
+    ['save-sleep-time', 100], // Time to sleep in milliseconds before and after saving. If you are having trouble with your automatic saves not "taking effect" try increasing this.
     ['click-sleep-time', 5], // Time to sleep in milliseconds before and after clicking any button (or setting text). Increase if clicks don't appear to be "taking effect".
     ['find-sleep-time', 0], // Time to sleep in milliseconds before (but not after) trying to find any element on screen. Increase if you are frequently getting errors detecting elements that should be on screen.
     ['use-basic-strategy', false], // Set to true to use the basic strategy (Stay on 17+)
     ['enable-logging', false], // Set to true to pop up a tail window and generate logs.
     ['kill-all-scripts', false], // Set to true to kill all running scripts before running.
     ['no-deleting-remote-files', false], // By default, if --kill-all-scripts, we will also remove remote files to speed up save/reload
-    ['on-completion-script', ''], // Spawn this script when max-charges is reached
+    ['on-completion-script', null], // Spawn this script when max-charges is reached
     ['on-completion-script-args', []], // Optional args to pass to the script when launched
 ];
 export function autocomplete(data, args) {
@@ -350,7 +352,7 @@ export async function main(ns) {
                         netWinnings += bet;
                         // Keep tabs of our best winnings, and save the game each time we top it
                         if (netWinnings > peakWinnings) {
-                            peakWinnings = netWinnings
+                            peakWinnings = netWinnings;
                             if (netWinnings > 0)
                                 if (saveSleepTime) await ns.sleep(saveSleepTime);
                             await click(btnSaveGame); // Save if we won
@@ -465,6 +467,9 @@ export async function main(ns) {
             if (terminalNav) await click(terminalNav);
         } catch (err) { log(ns, `WARNING: Failed to route to the terminal: ${getErrorInfo(err)}`, false); }
 
+        // Write completion file BEFORE launching the completion script to prevent restart loops
+        ns.write(CASINO_DONE_FILE, "done", "w");
+
         // Run the completion script before shutting down
         let completionScript = options['on-completion-script'];
         if (!completionScript) return;
@@ -566,7 +571,7 @@ export async function main(ns) {
                 const errMessage = customErrorMessage ?? `Could not find the element with xpath: \"${logSafeXPath}\"\n` +
                     `Something may have stolen focus or otherwise routed the UI away from the Casino.`;
                 log(ns, 'ERROR: ' + errMessage, true, 'error')
-                throw new Error(errMessage, true, 'error');
+                throw new Error(errMessage);
             }
         } catch (e) {
             if (!expectFailure) throw e;

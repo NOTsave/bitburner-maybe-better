@@ -9,7 +9,7 @@ export async function main(ns) {
     if (!keepRunning)
         ns.print(`tor-manager will run once. Run with argument "-c" to run continuously.`)
 
-    let hasTor = () => ns.scan("home").includes("darkweb");
+    let hasTor = () => ns.fileExists("darkweb") || ns.singularity.purchaseTor();
     if (hasTor())
         return ns.print('Player already has Tor');
     do {
