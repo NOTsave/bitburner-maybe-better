@@ -7,7 +7,7 @@ Welcome to Insight's Bitburner scripts - one of the Bitburner scripts of all tim
 
 
 
-btw its still broken, the coproration scritps are hell on Earth 
+btw its still broken, the coproration scritps are hell on Earth ; will fix later
 
 
 
