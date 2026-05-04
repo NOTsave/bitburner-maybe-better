@@ -41,7 +41,7 @@ export async function main(ns) {
         try {
             // Fix #1, #8: Use cached data instead of direct API call
             const corp = await getCachedCorpData(ns);
-            if (!corp) { await ns.sleep(10000); continue; }
+            if (!corp) { await asleep(ns, 10000); continue; }
 
             // --- EARLY GAME SMART SUPPLY MANAGEMENT ---
             // Disable Smart Supply on Agriculture if Chemical doesn't exist (prevents buying inputs)
@@ -117,7 +117,7 @@ async function manageEarlyGameSmartSupply(ns, corp) {
             totalChemicalRate += chemicalRate;
             
             // Verify the buy rates were actually set
-            await ns.sleep(100); // Brief wait for API to apply
+            await asleep(ns, 100); // Brief wait for API to apply
             const waterMaterial = await cc(ns, 'ns.corporation.getMaterial(ns.args[0], ns.args[1], ns.args[2])',
                 [agriDiv.name, city, 'Water']);
             const chemMaterial = await cc(ns, 'ns.corporation.getMaterial(ns.args[0], ns.args[1], ns.args[2])',

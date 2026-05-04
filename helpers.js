@@ -551,16 +551,17 @@ export async function runCommand_Custom(ns, fnRun, command, fileName, args = [],
             let reason = " (likely due to insufficient RAM)";
             // Just to be super clear - try to find out how much ram this script requires vs what we have available
             try {
-                const reqRam = await getNsDataThroughFile_Custom(ns, fnRun, 'ns.getScriptRam(ns.args[0])', null, [fileName], false, 1, 0, true);
-                const homeMaxRam = await getNsDataThroughFile_Custom(ns, fnRun, 'ns.getServerMaxRam(ns.args[0])', null, ["home"], false, 1, 0, true);
-                const homeUsedRam = await getNsDataThroughFile_Custom(ns, fnRun, 'ns.getServerUsedRam(ns.args[0])', null, ["home"], false, 1, 0, true);
+                // Use direct API calls to avoid circular dependency when RAM is insufficient
+                const reqRam = ns.getScriptRam(fileName);
+                const homeMaxRam = ns.getServerMaxRam("home");
+                const homeUsedRam = ns.getServerUsedRam("home");
                 if (reqRam > homeMaxRam)
-                    reason = ` as it requires ${formatRam(reqRam)} RAM, but home only has ${formatRam(homeMaxRam)}`;
+                    reason = ` as it requires ${formatRam(ns, reqRam)} RAM, but home only has ${formatRam(ns, homeMaxRam)}`;
                 else if (reqRam > homeMaxRam - homeUsedRam)
-                    reason = ` as it requires ${formatRam(reqRam)} RAM, but home only has ${formatRam(homeMaxRam - homeUsedRam)} of ${formatRam(homeMaxRam)} free.`;
+                    reason = ` as it requires ${formatRam(ns, reqRam)} RAM, but home only has ${formatRam(ns, homeMaxRam - homeUsedRam)} of ${formatRam(ns, homeMaxRam)} free.`;
                 else
-                    reason = `, but the reason is unclear. (Perhaps a syntax error?) This script requires ${formatRam(reqRam)} RAM, and ` +
-                        `home has ${formatRam(homeMaxRam - homeUsedRam)} of ${formatRam(homeMaxRam)} free, which appears to be sufficient. ` +
+                    reason = `, but the reason is unclear. (Perhaps a syntax error?) This script requires ${formatRam(ns, reqRam)} RAM, and ` +
+                        `home has ${formatRam(ns, homeMaxRam - homeUsedRam)} of ${formatRam(ns, homeMaxRam)} free, which appears to be sufficient. ` +
                         `If you wish to troubleshoot, you can try manually running the script with the arguments listed below:`;
             } catch (ex) { /* It was worth a shot. Stick with the generic error message. */ }
             return `The temp script was not run${reason}.` +
@@ -601,7 +602,7 @@ export async function waitForProcessToComplete_Custom(ns, fnIsAlive, pid, verbos
             break; // Script is done running
         }
         if (verbose && retries % 100 === 0) ns.print(`Waiting for pid ${pid} to complete... (${formatDuration(Date.now() - start)})`);
-        await ns.sleep(sleepMs); // TODO: If we can switch to `await nextPortWrite(pid)` for signalling temp script completion, it would return faster.
+        await asleep(ns, sleepMs); // TODO: If we can switch to `await nextPortWrite(pid)` for signalling temp script completion, it would return faster.
         sleepMs = Math.min(sleepMs * 2, 200);
     }
     // Make sure that the process has shut down and we haven't just stopped retrying
@@ -633,7 +634,7 @@ export async function autoRetry(ns, fnFunctionThatMayFail, fnSuccessCondition, e
     while (attempts++ <= maxRetries) {
         // Sleep between attempts
         if (attempts > 1) {
-            await ns.sleep(retryDelayMs);
+            await asleep(ns, retryDelayMs);
             retryDelayMs *= backoffRate;
         }
         try {
@@ -1140,13 +1141,13 @@ export function formatWithNs(ns, num, formatType = 'number') {
  * @returns {number} Current script's RAM usage */
 export function calculateRamUsage(ns) {
     const script = ns.getRunningScript();
-    return script.ramUsage * script.threads;
+    return script ? script.ramUsage * script.threads : 0;
 }
 
 /** @param {NS} ns 
  * @returns {ProcessInfo[]} Array of running corp-related modules */
 export function getRunningModules(ns) {
-    return ns.ps().filter(p => 
+    return ns.ps('home').filter(p => 
         p.filename.includes('corp-') && p.pid !== ns.pid
     );
 }

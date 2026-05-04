@@ -63,7 +63,7 @@ export async function main(ns) {
     while (true) {
         try {
             const corp = await getCachedCorpData(ns); // Fix #4: Use cached data
-            if (!corp) { await ns.sleep(10000); continue; }
+            if (!corp) { await asleep(ns, 10000); continue; }
 
             const now = Date.now();
             

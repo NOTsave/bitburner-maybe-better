@@ -1,4 +1,4 @@
-import { getNsDataThroughFile, runCommand, log, TIMEOUT } from '../helpers.js'
+import { getNsDataThroughFile, runCommand, log, TIMEOUT, asleep } from '../helpers.js'
 
 /**
  * Standardized dividend management for corporation
@@ -42,7 +42,7 @@ export async function setDividendPercentage(ns, targetPercent, reason = 'Unknown
             await runCommand(ns, `ns.corporation.issueDividends(ns.args[0] / 100)`, '/Temp/dividend-adjust.js', [targetPercent]);
             
             // Verify the change took effect
-            await ns.sleep(DIVIDEND_CONFIG.validationDelay);
+            await asleep(ns, DIVIDEND_CONFIG.validationDelay);
             const newRate = await getNsDataThroughFile(ns, 'ns.corporation.getCorporation().dividendRate');
             const newPercent = (newRate || 0) * 100;
             
@@ -50,7 +50,7 @@ export async function setDividendPercentage(ns, targetPercent, reason = 'Unknown
                 log(ns, `SUCCESS: Dividend set to ${newPercent.toFixed(1)}% (was ${currentPercent.toFixed(1)}%) - ${reason}`, false, 'success');
                 return true;
             } else {
-                log(ns, `WARN: Dividend setting verification failed. Expected ${targetPercent}%, got ${newPercent}%`, false, 'warning');
+                // Silent warning - let caller handle logging
             }
             
         } catch (error) {
@@ -59,11 +59,11 @@ export async function setDividendPercentage(ns, targetPercent, reason = 'Unknown
         
         attempts++;
         if (attempts < DIVIDEND_CONFIG.maxRetries) {
-            await ns.sleep(DIVIDEND_CONFIG.retryDelay);
+            await asleep(ns, DIVIDEND_CONFIG.retryDelay);
         }
     }
     
-    log(ns, `ERROR: Failed to set dividend to ${targetPercent}% after ${DIVIDEND_CONFIG.maxRetries} attempts`, false, 'error');
+    // Silent error - let caller handle logging
     return false;
 }
 

@@ -56,7 +56,7 @@ export async function main(ns) {
         try {
             // Fix #1, #8: Use cached data instead of direct API call
             const corp = await getCachedCorpData(ns);
-            if (!corp) { await ns.sleep(10000); continue; }
+            if (!corp) { await asleep(ns, 10000); continue; }
 
             const now = Date.now();
             

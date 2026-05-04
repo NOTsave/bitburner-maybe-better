@@ -97,7 +97,7 @@ async function getAvailableRam(ns) {
         }
         
         attempts++;
-        await ns.sleep(100); // Brief pause between attempts
+        await asleep(ns, 100); // Brief pause between attempts
     }
     
     // Fallback to conservative estimate
@@ -198,13 +198,13 @@ export async function main(ns) {
         if (!dataAvailable) {
             attempts++;
             log(ns, `INFO: Waiting for data... (${attempts}/${maxAttempts})`, false, 'info');
-            await ns.sleep(10000); // Waiting 10s
+            await asleep(ns, 10000); // Waiting 10s
         }
     }
     
     if (!dataAvailable) {
         log(ns, "ERROR: Data not available even after 5 minutes! Starting in emergency mode...", true, 'error');
-        await ns.sleep(5000);
+        await asleep(ns, 5000);
         try {
             // Emergency mode - start only basic modules with dynamic RAM calculation
             const currentAvailableRAM = await getAvailableRam(ns);
@@ -310,7 +310,7 @@ async function manageModulesWithSelfTermination(ns, state) {
             if (availableRAM >= dynamicRamCost) {
                 log(ns, `INFO: Starting module: ${name} (${dynamicRamCost.toFixed(1)}GB RAM)`, false, 'info');
                 await ns.run(config.file, 1);
-                await ns.sleep(1000); // Allow time to start
+                await asleep(ns, 1000); // Allow time to start
             } else {
                 log(ns, `WARNING: Insufficient RAM for ${name} (${dynamicRamCost.toFixed(1)}GB needed, ${availableRAM.toFixed(1)}GB available)`, false, 'warning');
             }
@@ -457,7 +457,7 @@ async function terminateModule(ns, filename, moduleName) {
             await ns.kill(script.pid);
             log(ns, `INFO: Terminating ${moduleName} (PID: ${script.pid})`, false, 'info');
         }
-        await ns.sleep(2000); // Allow time for clean termination
+        await asleep(ns, 2000); // Allow time for clean termination
     } catch (e) {
         log(ns, `ERROR: Error terminating ${moduleName}: ${e.message || e}`, false, 'error');
     }

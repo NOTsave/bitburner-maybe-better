@@ -31,7 +31,7 @@ async function restartCorp(ns, restartAttempts, maxRestartAttempts) {
     const pid = ns.run(getFilePath('corp-manager.js'), 1);
     if (pid > 0) {
         log(ns, `SUCCESS: Restarted corp-manager.js with pid ${pid}`, true, 'success');
-        await ns.sleep(5000); // Give it time to start
+        await asleep(ns, 5000); // Give it time to start
         return 0; // Reset counter on successful restart
     } else {
         log(ns, `ERROR: Failed to restart corp-manager.js`, true, 'error');
@@ -55,7 +55,7 @@ export async function main(ns) {
 
     while (true) {
         try {
-            await ns.sleep(checkInterval);
+            await asleep(ns, checkInterval);
 
             // Check if corp-manager.js protection file exists and is recent
             const protectionData = ns.read('/Temp/corp-protection.txt');
