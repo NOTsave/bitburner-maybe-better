@@ -1,4 +1,4 @@
-# Insight's Scripts
+# Insight's Scripts (but my own version of them) 
 Welcome to Insight's Bitburner scripts - one of the Bitburner scripts of all time. :)
 
 
@@ -26,7 +26,7 @@ You can think of this as the "master orchestrator" script. It will kick off daem
 Most scripts can also be run on their own, but are primarily designed to be orchestrated by autopilot.js or daemon.js.
 v3.0 Compatibility
 
-All scripts have been audited and updated for Bitburner v3.0 (Steam release). Key changes:
+Key changes:
 
     ns.tFormat replaced with ns.format.time()
 
@@ -135,7 +135,7 @@ Default behaviours are to try to "balance" priorities and give most things an eq
 Near the top of the initializer for daemon.js, there are a list of external scripts that are spawned initially, and periodically. Some of these can be commented out if you would rather not have that script run automatically (for example work-for-factions if you would like to manually choose how to spend your "focus" times.) Once you've downloaded this file, you should customize it with the default options you like, and comment out the external scripts you don't want to run.
 Aliases
 
-You may find it useful to set up one or more aliases with the default options you like rather than editing the file itself. (Pro-tip, aliases support tab-auto-completion). I personally use the following aliases:
+You may find it useful to set up one or more aliases with the default options you like rather than editing the file itself. (Pro-tip, aliases support tab-auto-completion).
 
     alias git-pull="run git-pull.js"
 
@@ -229,4 +229,4 @@ Your config file should either of the following two formats:
 
 Customizing Script Code (Advanced)
 
-I encourage you to make a fork and customize scripts to your own needs / liking. Please don't make a PR back to me unless you truly think it's something all would benefit from. If you fork the repository, you can update the git-pull.js source to include your github account as the default, or set an alias that specifies this via command-line (e.g. alias git-pull="run git-pull.js --github mygitusername --repository bitburner-scripts). This way you can auto-update from your fork and only merge my latest changes when you're ready.
+I encourage you to make a fork and customize scripts to your own needs / liking. If you fork the repository, you can update the git-pull.js source to include your github account as the default, or set an alias that specifies this via command-line (e.g. alias git-pull="run git-pull.js --github mygitusername --repository bitburner-scripts).
