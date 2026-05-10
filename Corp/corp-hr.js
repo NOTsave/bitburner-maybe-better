@@ -1,5 +1,5 @@
-import { getNsDataThroughFile, log, formatMoney, getCachedCorpData, handleCorpError, safeCorpOperation, getTobaccoDivision, isDivisionValid, asleep } from '../helpers.js'
-import { calculateOptimalPartyCost, calculatePerfMult } from '../corp-helpers.js'
+import { getNsDataThroughFile, log, formatMoney, asleep, safeRemoveFile, getConfiguration } from '../helpers.js'
+import { calculateOptimalPartyCost, calculatePerfMult, withCorpLock, CORP_LOCK_FILE, cc, getCachedCorpData, handleCorpError, safeCorpOperation, getTobaccoDivision, isDivisionValid } from '../corp-helpers.js'
 
 // Fix #6: Global Constant Definitions
 const CORP_CONFIG = {
@@ -37,14 +37,12 @@ const STAFF = {
     }
 };
 
-async function cc(ns, cmd, args = []) { 
-    try {
-        return await getNsDataThroughFile(ns, cmd, null, args);
-    } catch (e) {
-        log(ns, `WARN: Command failed: ${cmd} - ${e.message || e}`, false, 'warning');
-        throw e;
-    }
-}
+// Parse command line arguments using getConfiguration
+const argsSchema = [
+    ['temp-prefix', '/Temp/corp-'], // Default prefix
+];
+const options = getConfiguration(ns, argsSchema);
+const tempPrefix = options['temp-prefix'];
 
 export async function main(ns) {
     log(ns, `👥 Starting HR Manager (Tea/Party intervals: ${HR_CONFIG.teaInterval/1000}s/${HR_CONFIG.partyInterval/1000}s)`, false, 'info');

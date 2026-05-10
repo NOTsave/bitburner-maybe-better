@@ -241,6 +241,26 @@ export function formatDuration(duration) {
 /** Generate a hashCode for a string that is pretty unique most of the time */
 export function hashCode(s) { return s.split("").reduce(function (a, b) { a = ((a << 5) - a) + b.charCodeAt(0); return a & a }, 0); }
 
+/**
+ * Safely remove a file without throwing errors if it doesn't exist
+ * @param {NS} ns 
+ * @param {string} filePath - Path to file to remove
+ */
+export async function safeRemoveFile(ns, filePath) {
+    try {
+        if (ns.fileExists(filePath)) {
+            ns.rm(filePath);
+        }
+    } catch (e) {
+        log(ns, `WARN: Failed to clean up temp file ${filePath}: ${e.message || e}`, false, 'warning');
+        // Don't throw - cleanup failures shouldn't crash scripts
+    }
+}
+
+// ============================================================================
+// SAFE FILE OPERATIONS
+// ============================================================================
+
 /** @param {NS} ns **/
 export function disableLogs(ns, listOfLogs) { ['disableLog'].concat(...listOfLogs).forEach(log => checkNsInstance(ns, '"disableLogs"').disableLog(log)); }
 
@@ -437,6 +457,19 @@ export async function getNsDataThroughFile_Custom(ns, fnRun, command, fName = nu
                             `\nThe script was likely passed invalid arguments. Please post a screenshot of this error on discord.`),
         maxRetries, retryDelayMs, undefined, verbose, verbose, silent);
     if (verbose) log(ns, `Read the following data for command ${command}:\n${fileData}`);
+    
+    // Clean up temp files to prevent /Temp/ from filling up
+    try {
+        if (ns.fileExists(fName)) {
+            ns.rm(fName);
+        }
+        if (ns.fileExists(fNameCommand)) {
+            ns.rm(fNameCommand);
+        }
+    } catch (cleanupError) {
+        // Cleanup failures are non-critical, don't log to avoid spam
+    }
+    
     return JSON.parse(fileData, jsonReviver); // Deserialize it back into an object/array and return
 }
 
@@ -1195,129 +1228,6 @@ export const HACKNET_DATA_PATH = '/Temp/hacknet-data.json';
 export const GANG_DATA_PATH = '/Temp/gang-data.json';
 export const STOCK_DATA_PATH = '/Temp/stock-data.json';
 export const STOCK_PROBABILITIES_PATH = '/Temp/stock-probabilities.txt';
-/**
- * Optimized cache reader with tiered TTL system
- * @param {NS} ns 
- * @param {string} path 
- * @param {string} type - Cache type for TTL selection
- * @returns {object|null} Cached data or null if invalid/expired
- */
-export function getCachedCorpData(ns, path = DEFAULT_CORP_DATA_PATH, type = 'corp') {
-    if (!ns.fileExists(path)) return null;
-    
-    try {
-        const content = ns.read(path);
-        
-        // Validate content is not empty or corrupted
-        if (!content || typeof content !== 'string' || content.trim().length === 0) {
-            return null;
-        }
-        
-        // Check size limits
-        if (content.length > MAX_CACHE_SIZE) {
-            log(ns, `WARN: Cache file ${path} exceeds size limit (${content.length} > ${MAX_CACHE_SIZE})`, false, 'warning');
-            return null;
-        }
-
-        const wrapper = safeParseJSON(content);
-        if (!wrapper) {
-            log(ns, `WARN: Cache file ${path} contains invalid JSON`, false, 'warning');
-            return null;
-        }
-        
-        // Ensure we are looking at our standardized wrapper format
-        if (!wrapper || typeof wrapper !== 'object' || !wrapper.payload || !wrapper.timestamp) {
-            log(ns, `WARN: Cache file ${path} has invalid wrapper format`, false, 'warning');
-            return null;
-        }
-        
-        // Validate timestamp is reasonable
-        if (typeof wrapper.timestamp !== 'number' || wrapper.timestamp <= 0) {
-            log(ns, `WARN: Cache file ${path} has invalid timestamp`, false, 'warning');
-            return null;
-        }
-        
-        const ttl = TTL_CONFIG[type] || TTL_CONFIG.default;
-        if (Date.now() - wrapper.timestamp > ttl) {
-            log(ns, `INFO: Cache file ${path} expired (${Date.now() - wrapper.timestamp}ms > ${ttl}ms)`, false, 'info');
-            return null;
-        }
-        
-        // Validate payload structure
-        if (typeof wrapper.payload !== 'object') {
-            log(ns, `WARN: Cache file ${path} has invalid payload structure`, false, 'warning');
-            return null;
-        }
-        
-        return wrapper.payload;
-    } catch (error) {
-        log(ns, `ERROR: Failed to read cache file ${path}: ${error.message || error}`, false, 'error');
-        return null;
-    }
-}
-
-
-
-/**
- * Standardized error handling for corporation modules
- * @param {NS} ns The nestscript instance
- * @param {string} moduleName Name of the module where error occurred
- * @param {Error|string} error The error that occurred
- * @param {string} context Additional context about the operation
- * @param {boolean} critical Whether this is a critical error that should stop execution
- */
-export function handleCorpError(ns, moduleName, error, context = '', critical = false) {
-    checkNsInstance(ns, '"handleCorpError"');
-    const errorStr = error?.message || error || 'Unknown error';
-    const logLevel = critical ? 'error' : 'warning';
-    const message = context ? `${moduleName} ${context}: ${errorStr}` : `${moduleName}: ${errorStr}`;
-    
-    log(ns, `ERROR: ${message}`, critical, logLevel);
-    
-    // For critical errors, we might want to take additional action
-    if (critical) {
-        // Could add logic to notify admins or trigger emergency procedures
-        ns.print(`CRITICAL ERROR in ${moduleName}: ${errorStr}`);
-    }
-}
-
-/**
- * Safe wrapper for corporation operations with standardized error handling
- * @param {NS} ns The nestcript instance
- * @param {string} moduleName Name of the module for error reporting
- * @param {Function} operation The async operation to perform
- * @param {string} context Context description for the operation
- * @param {*} fallback Value to return if operation fails
- * @returns {Promise<*>} Result of operation or fallback
- */
-export async function safeCorpOperation(ns, moduleName, operation, context = '', fallback = null) {
-    try {
-        return await operation();
-    } catch (error) {
-        handleCorpError(ns, moduleName, error, context);
-        return fallback;
-    }
-}
-
-/**
- * @param {Corporation} corp
- * @param {string} type - e.g., 'Tobacco' or 'Agriculture'
- * @returns {Division}
- */
-/**
- * Optimized for Bitburner: Basic JSON validity check to prevent script crashes
- * @param {string} content 
- * @returns {object|null} Parsed JSON or null if invalid
- */
-export function safeParseJSON(content) {
-    try {
-        return JSON.parse(content);
-    } catch (e) {
-        // If file is garbled, just return null so the 
-        // calling script can wait for the next clean write.
-        return null;
-    }
-}
 
 /**
  * Atomic file write with verification to prevent data loss
@@ -1342,7 +1252,7 @@ export async function safelyWriteData(ns, path, data, silent = false) {
         const serialized = JSON.stringify(wrapper);
         
         // Size validation
-        if (serialized.length > MAX_CACHE_SIZE) {
+        if (serialized.length > 5 * 1024 * 1024) {
             throw new Error(`Data too large: ${serialized.length} bytes`);
         }
         
@@ -1362,38 +1272,6 @@ export async function safelyWriteData(ns, path, data, silent = false) {
         }
         return false;
     }
-}
-
-export function getDivisionByType(corp, type) {
-    if (!corp || !corp.divisions) {
-        throw new Error("Invalid Corporation object provided to helper.");
-    }
-    const div = corp.divisions.find(d => d.type === type);
-    if (!div) {
-        throw new Error(`Required division type ${type} not found in Corporation.`);
-    }
-    return div;
-}
-
-/**
- * Validates if a division object has the required structure
- * @param {Division} div - Division object to validate
- * @returns {boolean} True if valid, false otherwise
- */
-export function isDivisionValid(div) {
-    return div && typeof div === 'object' && typeof div.name === 'string';
-}
-
-/**
- * Gets the Tobacco division from corporation data (uses 'Tobacco' type)
- * @param {Corporation} corp - Corporation data object
- * @returns {Division|null} Tobacco division or null if not found
- */
-export function getTobaccoDivision(corp) {
-    if (!corp || !corp.divisions || !Array.isArray(corp.divisions)) {
-        return null;
-    }
-    return corp.divisions.find(d => d.type === 'Tobacco') || null;
 }
 
 /**

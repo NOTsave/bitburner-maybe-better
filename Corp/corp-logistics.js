@@ -1,5 +1,5 @@
-import { getNsDataThroughFile, log, formatMoney, getCachedCorpData, asleep } from '../helpers.js'
-import { calculateOptimalBoostMaterials, calculateBoostPurchaseRate, INDUSTRY_BOOST_COEFFICIENTS } from '../corp-helpers.js'
+import { getNsDataThroughFile, log, formatMoney, asleep } from '../helpers.js'
+import { calculateOptimalBoostMaterials, calculateBoostPurchaseRate, INDUSTRY_BOOST_COEFFICIENTS, getCachedCorpData } from '../corp-helpers.js'
 
 // Fix #6: Global Constant Definitions
 const CORP_CONFIG = {

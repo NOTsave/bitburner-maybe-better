@@ -1,6 +1,7 @@
-import { getNsDataThroughFile, log, formatMoney, formatNumber, formatRam, getFilePath, 
-    getFnRunViaNsExec, getFnIsAliveViaNsIsRunning, runCommand, getNsDataThroughFile_Custom, getCachedCorpData, asleep } from '../helpers.js'
+import { log, getNsDataThroughFile, safeRemoveFile, formatMoney, formatNumber, formatRam, getFilePath, 
+    getFnRunViaNsExec, getFnIsAliveViaNsIsRunning, runCommand, getNsDataThroughFile_Custom, asleep, getConfiguration } from '../helpers.js'
 import { setOperatingDividends } from './corp-dividend-manager.js'
+import { withCorpLock, CORP_LOCK_FILE, cc, getCachedCorpData } from '../corp-helpers.js';
 
 // Stock module configuration
 const STOCK_CONFIG = {
@@ -19,9 +20,12 @@ const STOCK_CONFIG = {
     ]
 };
 
-async function cc(ns, cmd, args = []) { 
-    return await getNsDataThroughFile(ns, cmd, null, args); 
-}
+// Parse command line arguments using getConfiguration
+const argsSchema = [
+    ['temp-prefix', '/Temp/corp-'], // Default prefix
+];
+const options = getConfiguration(ns, argsSchema);
+const tempPrefix = options['temp-prefix'];
 
 export async function main(ns) {
     log(ns, `📈 Starting Stock Manager (self-termination: ${STOCK_CONFIG.selfTerminate ? 'ENABLED' : 'DISABLED'})`, false, 'info');

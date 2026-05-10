@@ -1,9 +1,10 @@
 import { formatMoney, formatRam, getConfiguration, getNsDataThroughFile, log } from '../helpers.js'
 
-const max_ram = 2 ** 30;
+const MAX_RAM = 2 ** 30; // 1PB (max possible in most BNs)
 const argsSchema = [
-    ['budget', 0.2], // Spend up to this much of current cash on ram upgrades per tick (Default is high, because these are permanent for the rest of the BN)
-    ['reserve', -1], // Reserve this much cash before determining spending budgets (defaults to contents of reserve.txt if not specified)
+    ['budget', 0.2], // Spend up to this fraction of available money per upgrade
+    ['reserve', -1], // Reserve this much cash (defaults to contents of reserve.txt)
+    ['interval', 10000], // Check every 10 seconds
 ];
 
 export function autocomplete(data, _) {
@@ -11,35 +12,110 @@ export function autocomplete(data, _) {
     return [];
 }
 
-/** @param {NS} ns **/
+/** @param {NS} ns */
 export async function main(ns) {
     const options = getConfiguration(ns, argsSchema);
-    if (!options) return; // Invalid options, or ran in --help mode.
-    const reserve = (options['reserve'] != -1 ? options['reserve'] : Number(ns.read("reserve.txt") ?? 0));
-    const money = await getNsDataThroughFile(ns, `ns.getServerMoneyAvailable(ns.args[0])`, null, ["home"]);
-    let spendable = Math.min(money - reserve, money * options.budget);
-    if (isNaN(spendable))
-        return log(ns, `ERROR: One of the arguments could not be parsed as a number: ${JSON.stringify(options)}`, true, 'error');
-    // Quickly buy as many upgrades as we can within the budget
-    do {
-        let cost = await getNsDataThroughFile(ns, `ns.singularity.getUpgradeHomeRamCost()`);
-        let currentRam = await getNsDataThroughFile(ns, `ns.getServerMaxRam(ns.args[0])`, null, ["home"]);
-        if (cost >= Number.MAX_VALUE || currentRam == max_ram)
-            return log(ns, `INFO: We're at max home RAM (${formatRam(currentRam)})`);
-        const nextRam = currentRam * 2;
-        const upgradeDesc = `home RAM from ${formatRam(currentRam)} to ${formatRam(nextRam)} (cost: ${formatMoney(cost)})`;
-        if (spendable < cost)
-            return log(ns, `Money we're allowed to spend (${formatMoney(spendable)}) is less than the cost (${formatMoney(cost)}) to upgrade ${upgradeDesc}`);
-        if (!(await getNsDataThroughFile(ns, `ns.singularity.upgradeHomeRam()`)))
-            return log(ns, `ERROR: Failed to upgrade ${upgradeDesc} thinking we could afford it ` +
-                `(cash: ${formatMoney(money)} budget: ${formatMoney(spendable)})`, true, 'error');
-        // Otherwise, we've successfully upgraded home ram.
-        log(ns, `SUCCESS: Upgraded ${upgradeDesc}`, true, 'success');
-        const newMaxRam = await getNsDataThroughFile(ns, `ns.getServerMaxRam(ns.args[0])`, null, ["home"]);
-        if (nextRam != newMaxRam)
-            log(ns, `WARNING: Expected to upgrade ${upgradeDesc}, but new home ram is ${newMaxRam}`, true, 'warning');
-        // Only loop again if we successfully upgraded home ram, to see if we can upgrade further
-        spendable -= cost;
-        await ns.sleep(100); // On the off-chance we have an infinite loop bug, this makes us killable.
-    } while (spendable > 0)
+    if (!options) return;
+
+    // Validate budget
+    if (isNaN(options.budget) || options.budget <= 0 || options.budget > 1) {
+        log(ns, `ERROR: Invalid budget value: ${options.budget}. Must be between 0 and 1.`, true, "error");
+        return;
+    }
+
+    // Check Singularity API availability
+    if (!ns.singularity) {
+        log(ns, "ERROR: Singularity API not available. This script requires SF4.", true, "error");
+        return;
+    }
+
+    // Read reserve (once, with fallback)
+    const reserveFileValue = (ns.read("reserve.txt") || "0").trim();
+    const reserve = options.reserve !== -1 ? options.reserve : Number(reserveFileValue);
+    if (isNaN(reserve)) {
+        log(ns, `ERROR: Invalid reserve value in reserve.txt: "${reserveFileValue}"`, true, "error");
+        return;
+    }
+
+    // Cache API results to reduce calls
+    let cachedRamData = null;
+    let lastRamUpdate = 0;
+    const RAM_CACHE_TTL = 5000; // 5 seconds
+
+    async function getRamData(ns) {
+        const now = Date.now();
+        if (cachedRamData && now - lastRamUpdate < RAM_CACHE_TTL) {
+            return cachedRamData;
+        }
+        const [money, currentRam, upgradeCost] = await getNsDataThroughFile(
+            ns,
+            `[
+                ns.getServerMoneyAvailable("home"),
+                ns.getServerMaxRam("home"),
+                ns.singularity.getUpgradeHomeRamCost()
+            ]`,
+            "/Temp/ram-manager-data.json"
+        );
+        cachedRamData = { money, currentRam, upgradeCost };
+        lastRamUpdate = now;
+        return cachedRamData;
+    }
+
+    // Main loop
+    while (true) {
+        try {
+            // Get current stats (with caching)
+            const { money, currentRam, upgradeCost } = await getRamData(ns);
+
+            // Validate data
+            if (money === undefined || currentRam === undefined || upgradeCost === undefined) {
+                log(ns, "ERROR: Failed to read game state. Retrying...", true, "error");
+                await ns.sleep(5000);
+                continue;
+            }
+
+            // Check if already maxed
+            if (currentRam >= MAX_RAM) {
+                log(ns, `Home RAM already maxed at ${formatRam(MAX_RAM)}. Exiting.`, true, "info");
+                return;
+            }
+
+            // Calculate spendable money
+            const spendable = Math.min(money - reserve, money * options.budget);
+            if (spendable <= 0) {
+                log(ns, `Insufficient funds. Spendable: ${formatMoney(spendable)} (Reserve: ${formatMoney(reserve)})`, true, "info");
+                await ns.sleep(options.interval);
+                continue;
+            }
+
+            // Check if upgrade is affordable
+            if (upgradeCost > spendable || upgradeCost === Infinity) {
+                log(ns, `Cannot afford upgrade (Cost: ${formatMoney(upgradeCost)}, Spendable: ${formatMoney(spendable)}).`, true, "info");
+                await ns.sleep(options.interval);
+                continue;
+            }
+
+            // Attempt upgrade
+            const success = await getNsDataThroughFile(
+                ns,
+                `ns.singularity.upgradeHomeRam()`,
+                null,
+                [],
+                false,
+                3,    // maxRetries
+                1000  // retryDelayMs
+            );
+
+            if (success) {
+                log(ns, `SUCCESS: Upgraded home RAM from ${formatRam(currentRam)} to ${formatRam(currentRam * 2)} for ${formatMoney(upgradeCost)}.`, true, "success");
+            } else {
+                log(ns, "WARN: Failed to upgrade home RAM. Retrying...", true, "warning");
+            }
+
+            await ns.sleep(options.interval);
+        } catch (e) {
+            log(ns, `ERROR: Critical error in ram-manager: ${e.message || e}`, true, "error");
+            await ns.sleep(5000); // Wait before retrying
+        }
+    }
 }

@@ -1,9 +1,6 @@
-import { getNsDataThroughFile, log, safelyWriteData, DEFAULT_CORP_DATA_PATH, asleep } from './helpers.js';
+import { getNsDataThroughFile, log, safelyWriteData, asleep, safeRemoveFile, formatMoney } from './helpers.js';
+import { withCorpLock, CORP_LOCK_FILE, cc, DEFAULT_CORP_DATA_PATH } from './corp-helpers.js';
 
-// RAM-dodging wrapper function
-async function cc(ns, cmd, args = []) { 
-    return await getNsDataThroughFile(ns, cmd, null, args); 
-}
 
 /** @param {NS} ns **/
 export async function main(ns) {
@@ -37,47 +34,63 @@ export async function main(ns) {
                 await asleep(ns, 5000);
                 continue;
             }
-            const divisionsData = [];
-            for (const div of corp.divisions) {
-                // Handle both string names and division objects
+            // Validate Corp structure
+            if (!corp || !corp.divisions || !Array.isArray(corp.divisions)) {
+                log(ns, "WARN: Invalid Corp data received. Retrying...", false, 'warning');
+                await asleep(ns, 5000);
+                continue;
+            }
+            
+            // ✅ BATCH ALL DIVISIONS INTO 1 TEMP SCRIPT
+            const divisionNames = corp.divisions.map(div => {
                 const name = typeof div === 'string' ? div : div?.name;
-                if (!name || name === 'undefined') {
-                    log(ns, `WARN: Skipping invalid division: ${JSON.stringify(div)}`, false, 'warning');
+                return name && name !== 'undefined' ? name : null;
+            }).filter(name => name !== null);
+            
+            if (divisionNames.length === 0) {
+                log(ns, 'WARN: No valid division names found', false, 'warning');
+                await asleep(ns, 5000);
+                continue;
+            }
+            
+            const divisionsData = await cc(
+                ns,
+                `ns.args[0].map(name => ns.corporation.getDivision(name))`,
+                `/Temp/all-divisions-${Date.now()}.json`,
+                [divisionNames]
+            );
+            
+            // Process divisions with validation
+            const processedDivisions = [];
+            for (let i = 0; i < divisionNames.length; i++) {
+                const name = divisionNames[i];
+                const divInfo = divisionsData[i];
+                if (!divInfo) {
+                    log(ns, `WARN: Failed to fetch division ${name}`, false, 'warning');
                     continue;
                 }
                 
-                try {
-                    // Fix #13: Explicit string cast
-                    const divInfo = await cc(ns, `ns.corporation.getDivision(ns.args[0])`, [name]);
-                    
-                    // Fix #6: Safe city mapping with explicit fallbacks
-                    const cities = (divInfo.cities || []).map(c => {
-                        if (typeof c === 'string') return c;
-                        if (c && typeof c === 'object' && typeof c.name === 'string') return c.name;
-                        return "Unknown";
-                    }).filter(city => city && city !== "Unknown");
-                    
-                    divisionsData.push({ 
-                        ...divInfo, 
-                        cities,
-                        name: name,
-                        type: divInfo.type || (typeof div === 'object' ? div.type : undefined) || 'Unknown'
-                    });
-                } catch (e) {
-                    // Fix #4: Preserve error details for better debugging
-                    divisionsData.push({ 
-                        name: name, 
-                        type: (typeof div === 'object' ? div.type : undefined) || 'Unknown',
-                        cities: [],
-                        researchPoints: 0,
-                        products: [],
-                        makesProducts: false,
-                        error: true, 
-                        msg: e.message || String(e),
-                        timestamp: Date.now()
-                    });
-                    log(ns, `WARN: Failed to fetch division ${name}: ${e.message || e}`, false, 'warning');
+                // Validate division data
+                if (!divInfo || !divInfo.name) {
+                    log(ns, `WARN: Invalid division data for ${name}: ${JSON.stringify(divInfo)}`, false, 'warning');
+                    continue;
                 }
+                
+                // Safe city mapping with explicit fallbacks
+                const cities = (divInfo.cities || []).map(c => {
+                    if (typeof c === 'string') return c;
+                    if (c && typeof c === 'object' && typeof c.name === 'string') return c.name;
+                    return "Unknown";
+                }).filter(city => city && city !== "Unknown");
+                
+                processedDivisions.push({ 
+                    ...divInfo, 
+                    cities,
+                    name: name,
+                    type: divInfo.type || corp.divisions.find(d => 
+                        (typeof d === 'string' ? d : d?.name) === name
+                    )?.type || 'Unknown'
+                });
             }
 
             // Create clean corp summary with standardized structure
@@ -85,10 +98,15 @@ export async function main(ns) {
                 name: corp.name,
                 funds: corp.funds,
                 revenue: corp.revenue,
-                divisions: divisionsData,
+                divisions: processedDivisions,
                 lastUpdate: Date.now(),
                 timestamp: new Date().toISOString()
             };
+
+            // Periodic Corp state logging for debugging (every ~60 seconds)
+            if (Date.now() % 60000 < 1000) {
+                log(ns, `Corp State: ${formatMoney(corp.funds)} | Revenue: ${formatMoney(corp.revenue)}/s | Divisions: ${corp.divisions.length}`, false, 'info');
+            }
 
             // Debug: log data size before write
             const dataSize = JSON.stringify(corpSummary).length;
@@ -107,7 +125,7 @@ export async function main(ns) {
             log(ns, `ERROR: Corp-fetcher failed: ${e.message || e}`, false, 'error');
         }
 
-        // Sync to corp tick for efficient updates (fallback to 2s sleep on error)
+        // Sync to corp tick for efficient updates (always sleep to prevent infinite loop)
         try {
             // Pre-check: if corp was sold while we were processing, exit cleanly
             if (!await cc(ns, 'ns.corporation.hasCorporation()')) {
@@ -115,8 +133,11 @@ export async function main(ns) {
                 return;
             }
             await cc(ns, 'ns.corporation.nextUpdate()');
-        } catch {
+        } catch (nextUpdateError) {
+            log(ns, `WARN: nextUpdate() failed: ${nextUpdateError.message || nextUpdateError}`, false, 'warning');
             await asleep(ns, 2000);
         }
+        // ✅ THROTTLE: Always sleep, even on success - prevents infinite loop
+        await asleep(ns, 1000);
     }
 }

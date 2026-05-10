@@ -1,4 +1,5 @@
-import { getNsDataThroughFile, log, formatMoney, getCachedCorpData, asleep } from '../helpers.js'
+import { log, getNsDataThroughFile, safeRemoveFile, formatMoney, asleep, getConfiguration } from '../helpers.js';
+import { withCorpLock, CORP_LOCK_FILE, cc, getCachedCorpData } from '../corp-helpers.js';
 
 // Product Module Configuration
 const PRODUCT_CONFIG = {
@@ -18,9 +19,12 @@ const HOME_CITIES = {
     'AgriDiv': 'Sector-12'
 };
 
-async function cc(ns, cmd, args = []) { 
-    return await getNsDataThroughFile(ns, cmd, null, args); 
-}
+// Parse command line arguments using getConfiguration
+const argsSchema = [
+    ['temp-prefix', '/Temp/corp-'], // Default prefix
+];
+const options = getConfiguration(ns, argsSchema);
+const tempPrefix = options['temp-prefix'];
 
 export async function main(ns) {
     log(ns, `📦 Starting Product Manager (max ${PRODUCT_CONFIG.maxProducts} products)`, false, 'info');

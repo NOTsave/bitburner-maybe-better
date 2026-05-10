@@ -1,9 +1,9 @@
-import { log, disableLogs, getNsDataThroughFile, formatMoney, getCachedCorpData, calculateRamUsage, getRunningModules, getTobaccoDivision, isDivisionValid, DEFAULT_CORP_DATA_PATH, asleep } from './helpers.js'
-import { calculateOptimalDummyDivisions, calculateDummyDivisionOfferBoost, DUMMY_DIVISION_CONFIG } from './corp-helpers.js'
-
+import { log, disableLogs, getNsDataThroughFile, formatMoney, calculateRamUsage, getRunningModules, asleep } from './helpers.js'
+import { calculateOptimalDummyDivisions, calculateDummyDivisionOfferBoost, DUMMY_CORP_NAME, DUMMY_DIVISION_NAMES, DUMMY_DIVISION_TYPES, withCorpLock, CORP_LOCK_FILE, getCachedCorpData, getTobaccoDivision, isDivisionValid, DEFAULT_CORP_DATA_PATH } from './corp-helpers.js'
 const STATE_FILE = '/Temp/corp-state.txt';
 const PROTECT_FILE = '/Temp/corp-protection.txt';
 const LOCK_FILE = '/Temp/corp-lock.txt';  // Prevents cleanup.js from deleting temp files
+const CORP_OPERATION_LOCK = CORP_LOCK_FILE; // Lock for Corp operations
 
 // Module configuration with intelligent self-termination
 const MODULES = {
@@ -131,6 +131,32 @@ export async function main(ns) {
     disableLogs(ns, ['sleep', 'run', 'read', 'disableLog']);
     ns.ui.openTail();
     
+    // Centralized temp file management
+    const TEMP_PREFIX = `/Temp/corp-${ns.pid}-`; // Unique to this manager instance
+    
+    // Clean up all temp files on exit
+    ns.atExit(() => {
+        const tempFiles = ns.ls('home', TEMP_PREFIX);
+        let cleanedUp = 0;
+        for (const file of tempFiles) {
+            try {
+                ns.rm(file);
+                cleanedUp++;
+            } catch (e) {
+                log(ns, `WARN: Failed to clean up ${file}: ${e.message || e}`, false, 'warning');
+            }
+        }
+        if (cleanedUp > 0) {
+            log(ns, `INFO: Cleaned up ${cleanedUp} temp files`, false, 'info');
+        }
+    });
+    
+    // Check if Corporation API is available before proceeding
+    if (!ns.corporation) {
+        log(ns, "ERROR: Corporation API not available (requires SF3). Exiting.", true, 'error');
+        return;
+    }
+    
     // Prevent multiple instances - only one manager should orchestrate
     const runningInstances = ns.ps('home').filter(p => p.filename === 'corp-manager.js');
     if (runningInstances.length > 1) {
@@ -214,7 +240,7 @@ export async function main(ns) {
                 if (ns.isRunning(modName, 'home')) continue;
                 const dynamicRamCost = await getModuleRamCost(ns, modName);
                 if (currentAvailableRAM >= dynamicRamCost) {
-                    const pid = await ns.run(modName, 1);
+                    const pid = await ns.run(modName, 1, '--temp-prefix', TEMP_PREFIX);
                     if (pid === 0) {
                         log(ns, `ERROR: Emergency start failed for ${modName} - insufficient RAM or script not found`, false, 'error');
                     } else {
@@ -308,8 +334,14 @@ async function manageModulesWithSelfTermination(ns, state) {
         
         if (shouldRun && !isRunning) {
             if (availableRAM >= dynamicRamCost) {
-                log(ns, `INFO: Starting module: ${name} (${dynamicRamCost.toFixed(1)}GB RAM)`, false, 'info');
-                await ns.run(config.file, 1);
+                // Use lock file to prevent race conditions between modules
+                await withCorpLock(ns, async () => {
+                    log(ns, `INFO: Starting module: ${name} (${dynamicRamCost.toFixed(1)}GB RAM)`, false, 'info');
+                    const pid = await ns.run(config.file, 1, '--temp-prefix', TEMP_PREFIX);
+                    if (pid === 0) {
+                        log(ns, `ERROR: Failed to start ${name} - insufficient RAM or script not found`, false, 'error');
+                    }
+                });
                 await asleep(ns, 1000); // Allow time to start
             } else {
                 log(ns, `WARNING: Insufficient RAM for ${name} (${dynamicRamCost.toFixed(1)}GB needed, ${availableRAM.toFixed(1)}GB available)`, false, 'warning');
@@ -581,44 +613,49 @@ async function ensureCoreDivisions(ns, corp) {
             }
             await asleep(ns, 1000);
             
-            // Expand to all cities
+            // Expand to all cities - batch operations to reduce temp script spam
+            const cityOperations = [];
             for (const city of CITIES) {
                 if (city === 'Sector-12') continue; // Already exists
                 
+                const isAgriculture = industry === 'Agriculture';
+                const hasChemical = corp.divisions.some(d => d.type === 'Chemical');
+                const shouldEnableSmartSupply = !isAgriculture || hasChemical;
+                
+                cityOperations.push({
+                    city,
+                    shouldEnableSmartSupply
+                });
+            }
+            
+            // Batch city expansion operations
+            for (const operation of cityOperations) {
                 try {
+                    // Batch expandCity and purchaseWarehouse in single temp script
                     await getNsDataThroughFile(ns, 
-                        'ns.corporation.expandCity(ns.args[0], ns.args[1])', 
+                        `[
+                            ns.corporation.expandCity(ns.args[0], ns.args[1]),
+                            ns.corporation.purchaseWarehouse(ns.args[0], ns.args[1])
+                        ]`, 
                         null, 
-                        [config.name, city]
+                        [config.name, operation.city]
                     );
                     
-                    // Purchase warehouse for this city
-                    await getNsDataThroughFile(ns, 
-                        'ns.corporation.purchaseWarehouse(ns.args[0], ns.args[1])', 
-                        null, 
-                        [config.name, city]
-                    );
-                    
-                    // Enable smart supply ONLY if not Agriculture OR if Chemical division exists
-                    // Early-game Agriculture without Chemical will buy Chemicals from market - avoid this
-                    const isAgriculture = industry === 'Agriculture';
-                    const hasChemical = corp.divisions.some(d => d.type === 'Chemical');
-                    const shouldEnableSmartSupply = !isAgriculture || hasChemical;
-                    
-                    if (shouldEnableSmartSupply) {
+                    // Enable smart supply if needed (separate call since it's conditional)
+                    if (operation.shouldEnableSmartSupply) {
                         await getNsDataThroughFile(ns, 
                             'ns.corporation.setSmartSupply(ns.args[0], ns.args[1], true)', 
                             null, 
-                            [config.name, city]
+                            [config.name, operation.city]
                         );
                     } else {
-                        log(ns, `INFO: Smart Supply delayed for ${config.name}/${city} - waiting for Chemical division`, false, 'info');
+                        log(ns, `INFO: Smart Supply delayed for ${config.name}/${operation.city} - waiting for Chemical division`, false, 'info');
                     }
                     
-                    log(ns, `SUCCESS: ${config.name} expanded to ${city} with warehouse`, false, 'success');
+                    log(ns, `SUCCESS: ${config.name} expanded to ${operation.city} with warehouse`, false, 'success');
                     await asleep(ns, 1000);
                 } catch (e) {
-                    log(ns, `WARN: Failed to expand ${config.name} to ${city}: ${e.message || e}`, false, 'warning');
+                    log(ns, `WARN: Failed to expand ${config.name} to ${operation.city}: ${e.message || e}`, false, 'warning');
                 }
             }
             

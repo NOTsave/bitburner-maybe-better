@@ -1,4 +1,5 @@
-import { getNsDataThroughFile, log, formatMoney, getCachedCorpData, asleep } from '../helpers.js'
+import { log, getNsDataThroughFile, safeRemoveFile, formatMoney, asleep, getConfiguration } from '../helpers.js'
+import { withCorpLock, CORP_LOCK_FILE, cc, getCachedCorpData } from '../corp-helpers.js';
 
 // Priority research for maximum efficiency
 // CORRECTED per corp strategy guide: Costs are in RP (research points), not dollars
@@ -50,9 +51,12 @@ const RESEARCH_CONFIG = {
     ]
 };
 
-async function cc(ns, cmd, args = []) { 
-    return await getNsDataThroughFile(ns, cmd, null, args); 
-}
+// Parse command line arguments using getConfiguration
+const argsSchema = [
+    ['temp-prefix', '/Temp/corp-'], // Default prefix
+];
+const options = getConfiguration(ns, argsSchema);
+const tempPrefix = options['temp-prefix'];
 
 export async function main(ns) {
     const ramUsed = ns.getScriptRam(ns.getScriptName());
