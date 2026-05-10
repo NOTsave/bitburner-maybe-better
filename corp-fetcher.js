@@ -1,5 +1,10 @@
 import { getNsDataThroughFile, log, safelyWriteData, DEFAULT_CORP_DATA_PATH, asleep } from './helpers.js';
 
+// RAM-dodging wrapper function
+async function cc(ns, cmd, args = []) { 
+    return await getNsDataThroughFile(ns, cmd, null, args); 
+}
+
 /** @param {NS} ns **/
 export async function main(ns) {
     ns.print('corp-fetcher.js starting...');
@@ -14,7 +19,7 @@ export async function main(ns) {
     const DATA_PATH = DEFAULT_CORP_DATA_PATH;
 
     // Check if corporation API is available and corporation exists before entering main loop
-    const hasCorp = await getNsDataThroughFile(ns, 'ns.corporation.hasCorporation()');
+    const hasCorp = await cc(ns, 'ns.corporation.hasCorporation()');
     if (!hasCorp) {
         log(ns, 'INFO: No corporation owned yet. corp-fetcher.js exiting.', false, 'info');
         return;
@@ -23,11 +28,11 @@ export async function main(ns) {
     while (true) {
         try {
             // Double-check corporation still exists (in case it was sold/liquidated)
-            if (!await getNsDataThroughFile(ns, 'ns.corporation.hasCorporation()')) {
+            if (!await cc(ns, 'ns.corporation.hasCorporation()')) {
                 log(ns, 'INFO: Corporation no longer exists. corp-fetcher.js exiting.', false, 'info');
                 return;
             }
-            const corp = await getNsDataThroughFile(ns, 'ns.corporation.getCorporation()');
+            const corp = await cc(ns, 'ns.corporation.getCorporation()');
             if (!corp || !corp.divisions || !Array.isArray(corp.divisions)) {
                 await asleep(ns, 5000);
                 continue;
@@ -43,7 +48,7 @@ export async function main(ns) {
                 
                 try {
                     // Fix #13: Explicit string cast
-                    const divInfo = await getNsDataThroughFile(ns, `ns.corporation.getDivision(ns.args[0])`, null, [name]);
+                    const divInfo = await cc(ns, `ns.corporation.getDivision(ns.args[0])`, [name]);
                     
                     // Fix #6: Safe city mapping with explicit fallbacks
                     const cities = (divInfo.cities || []).map(c => {
@@ -105,11 +110,11 @@ export async function main(ns) {
         // Sync to corp tick for efficient updates (fallback to 2s sleep on error)
         try {
             // Pre-check: if corp was sold while we were processing, exit cleanly
-            if (!await getNsDataThroughFile(ns, 'ns.corporation.hasCorporation()')) {
+            if (!await cc(ns, 'ns.corporation.hasCorporation()')) {
                 log(ns, 'INFO: Corporation sold during processing. corp-fetcher.js exiting.', false, 'info');
                 return;
             }
-            await getNsDataThroughFile(ns, 'ns.corporation.nextUpdate()');
+            await cc(ns, 'ns.corporation.nextUpdate()');
         } catch {
             await asleep(ns, 2000);
         }

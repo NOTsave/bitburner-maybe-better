@@ -592,17 +592,26 @@ export async function waitForProcessToComplete(ns, pid, verbose = false) {
 export async function waitForProcessToComplete_Custom(ns, fnIsAlive, pid, verbose = false) {
     checkNsInstance(ns, '"waitForProcessToComplete_Custom"');
     if (!verbose) disableLogs(ns, ['sleep']);
-    // Wait for the PID to stop running (cheaper than e.g. deleting (rm) a possibly pre-existing file and waiting for it to be recreated)
+    // Wait for the PID to stop running with reasonable timeout to prevent freezing
     let start = Date.now();
     let sleepMs = 1;
     let done = false;
-    for (var retries = 0; retries < 1000; retries++) {
+    const MAX_RETRIES = 100; // Reduced from 1000 to prevent freezing
+    const TIMEOUT_MS = 30000; // 30 second timeout
+    
+    for (var retries = 0; retries < MAX_RETRIES; retries++) {
+        // Check timeout
+        if (Date.now() - start > TIMEOUT_MS) {
+            if (verbose) ns.print(`Timeout waiting for pid ${pid} after ${TIMEOUT_MS}ms`);
+            break;
+        }
+        
         if (!(await fnIsAlive(pid))) {
             done = true;
             break; // Script is done running
         }
-        if (verbose && retries % 100 === 0) ns.print(`Waiting for pid ${pid} to complete... (${formatDuration(Date.now() - start)})`);
-        await asleep(ns, sleepMs); // TODO: If we can switch to `await nextPortWrite(pid)` for signalling temp script completion, it would return faster.
+        if (verbose && retries % 20 === 0) ns.print(`Waiting for pid ${pid} to complete... (${formatDuration(Date.now() - start)})`);
+        await asleep(ns, sleepMs);
         sleepMs = Math.min(sleepMs * 2, 200);
     }
     // Make sure that the process has shut down and we haven't just stopped retrying
