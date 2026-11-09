@@ -1,33 +1,46 @@
-import { instanceCount, getFilePath, getNsDataThroughFile, disableLogs, log } from '../helpers.js'
+import { getFilePath, getNsDataThroughFile } from '../helpers.js'
 const scriptSolver = getFilePath("/Tasks/contractor.js.solver.js");
+const scriptLauncher = getFilePath('/Tasks/run-with-delay.js');
 
 /** @param {NS} ns **/
 export async function main(ns) {
-    // Prevent multiple instances of this script from being started
-    if (await instanceCount(ns, "home", false, false) > 1)
-        return log(ns, 'Another instance is already running. Shutting down...');
+    const servers = await getNsDataThroughFile(ns, `(() => {
+        const [callerPid, collector, solver, launcher] = ns.args;
+        const normalize = path => String(path).replace(/^\\//, '');
+        const servers = scanAllServers(ns);
+        const busy = servers.some(host => ns.ps(host).some(process => {
+            const file = normalize(process.filename);
+            return file === normalize(solver) ||
+                (file === normalize(launcher) && normalize(process.args[0]) === normalize(solver)) ||
+                (file === normalize(collector) && process.pid < callerPid);
+        }));
+        return busy ? [] : servers;
+    })()`, '/Temp/contract-scan-servers.txt', [ns.pid, ns.getScriptName(), scriptSolver, scriptLauncher]);
+    if (servers.length === 0)
+        return ns.print("Another contractor is scanning or solving contracts.");
 
-    disableLogs(ns, ["scan"]);
-    ns.print("Getting server list...");
-    const servers = await getNsDataThroughFile(ns, 'scanAllServers(ns)');
-    ns.print(`Got ${servers.length} servers. Searching for contracts on each...`);
-    // Retrieve all contracts and convert them to objects with the required information to solve
-    const contractsDb = servers.map(hostname => ({ hostname, contracts: ns.ls(hostname, '.cct') }))
-        .filter(o => o.contracts.length > 0)
-        .map(o => o.contracts.map(contract => ({ contract, hostname: o.hostname }))).flat();
-    if (contractsDb.length == 0)
+    const contracts = servers.flatMap(hostname => ns.ls(hostname, '.cct')
+        .filter(contract => contract.endsWith('.cct')).map(contract => ({ contract, hostname })));
+    if (contracts.length === 0)
         return ns.print("Found no contracts to solve.");
 
-    // Spawn temporary scripts to gather the remainder of contract data required for solving
-    ns.print(`Found ${contractsDb.length} contracts to solve. Gathering contract data via separate scripts..."`);
-    const serializedContractDb = JSON.stringify(contractsDb);
-    let contractsDictCommand = async (command, tempName) => await getNsDataThroughFile(ns,
-        `Object.fromEntries(JSON.parse(ns.args[0]).map(c => [c.contract, ${command}]))`, tempName, [serializedContractDb]);
-    let dictContractTypes = await contractsDictCommand('ns.codingcontract.getContractType(c.contract, c.hostname)', '/Temp/contract-types.txt');
-    let dictContractDataStrings = await contractsDictCommand('JSON.stringify(ns.codingcontract.getData(c.contract, c.hostname), jsonReplacer)', '/Temp/contract-data-stringified.txt');
-    contractsDb.forEach(c => c.type = dictContractTypes[c.contract]);
-    contractsDb.forEach(c => c.dataJson = dictContractDataStrings[c.contract]);
+    // Keep the queries separate so only one coding-contract API is charged per worker.
+    const collect = (entries, property, command, filename) => getNsDataThroughFile(ns,
+        `JSON.parse(ns.args[0]).flatMap(c => {
+            try {
+                return [{ ...c, ${property}: ${command} }];
+            } catch (error) {
+                if (String(error?.message ?? error).includes("Cannot find contract")) return [];
+                throw error;
+            }
+        })`, filename, [JSON.stringify(entries)]);
+    const typed = await collect(contracts, 'type', 'ns.codingcontract.getContractType(c.contract, c.hostname)', '/Temp/contract-types.txt');
+    if (typed.length === 0) return;
+    const ready = await collect(typed, 'dataJson', 'JSON.stringify(ns.codingcontract.getData(c.contract, c.hostname), jsonReplacer)', '/Temp/contract-data-stringified.txt');
+    ns.print(`Collected data for ${ready.length} of ${contracts.length} contracts.`);
+    if (ready.length === 0) return;
 
-    // Let this script die to free up ram, and start up a new script (after a delay) that will solve all these contracts using the minimum ram footprint of 11.6 GB
-    ns.run(getFilePath('/Tasks/run-with-delay.js'), { temporary: true }, scriptSolver, 1, JSON.stringify(contractsDb));
+    // Exit before the delayed launcher starts the solver to free RAM.
+    const pid = ns.run(scriptLauncher, { temporary: true }, scriptSolver, 1, JSON.stringify(ready));
+    if (!pid) ns.tprint(`ERROR: Could not start ${scriptLauncher} to solve ${ready.length} contracts.`);
 }

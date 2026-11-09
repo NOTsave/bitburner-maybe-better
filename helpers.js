@@ -282,8 +282,8 @@ export function getFnIsAliveViaNsPs(ns) {
 
 /**
  * Retrieve the result of an ns command by executing it in a temporary .js script, writing the result to a file, then shuting it down
- * Importing incurs 1.0 GB RAM (uses ns.run), but if you are already using ns.exec in your script for other purposes,
- * you can call getNsDataThroughFile_Custom with fnRun set to the result of `getFnRunViaNsExec(ns)` and incur no additional RAM.
+ * Uses 1.0 GB for ns.run and 0.1 GB for ns.isRunning. To reuse ns.exec, call
+ * getNsDataThroughFile_Custom with fnRun set to the result of `getFnRunViaNsExec(ns)`.
  * Has the capacity to retry if there is a failure (e.g. due to lack of RAM available). Not recommended for performance-critical code.
  * @param {NS} ns The nestcript instance passed to your script's main entry point
  * @param {string} command The ns command that should be invoked to get the desired data (e.g. "ns.getServer('home')" )
@@ -379,7 +379,7 @@ function getDefaultCommandFileName(command, ext = '.txt') {
 /**
  * An advanced version of getNsDataThroughFile that lets you pass your own "fnRun" implementation to reduce RAM
  * requirements (if you already reference ns.exec in your script, pass the result of `getFnRunViaNsExec(ns)`)
- * Importing incurs no RAM (now that ns.read is free) plus whatever fnRun you provide it.
+ * Uses 0.1 GB for ns.isRunning, plus whatever fnRun requires.
  * Has the capacity to retry if there is a failure (e.g. due to lack of RAM available). Not recommended for performance-critical code.
  * @param {NS} ns The ns instance passed to your script's main entry point
  * @param {function} fnRun A single-argument function used to start the new script, e.g. `ns.run` or `(f,...args) => ns.exec(f, "home", ...args)`
@@ -398,23 +398,37 @@ export async function getNsDataThroughFile_Custom(ns, fnRun, command, fName = nu
     // Check whether any backwards-compatible changes need to be made to the command being executed
     command = checkBackwardsCompatibility(ns, command);
 
-    // Create a file that will store the results of whatever command is executed.
     fName = fName || getDefaultCommandFileName(command);
-    const fNameCommand = fName + '.js'
-    // Pre-write contents to the file that will allow us to detect if our temp script never got run
+    const fNameCommand = fName + '.js';
     const initialContents = "<Insufficient RAM>";
-    ns.write(fName, initialContents, 'w');
+    const usePort = isV3(ns);
+    // Reserve a high-numbered port per worker, separate from user-configured coordination ports.
+    const portOffset = 2 ** 32;
+    if (!usePort) ns.write(fName, initialContents, 'w');
 
-    // Prepare a command that will write out a new file containing the results of the command
-    // unless it already exists with the same contents (saves time/ram to check first)
-    // If an error occurs, it will write the error message to the file (and this will be detected when we read the result)
-    // TODO: (Issue #481) Add special handling for null and undefined results, so that functions returning no value can also be invoked via this function.
     const commandToFile = `let r;try{r=JSON.stringify(\n` +
         `    ${command}\n` +
-        `, jsonReplacer);}catch(e){r="ERROR: "+(typeof e=='string'?e:e?.message??JSON.stringify(e));}\n` +
-        `const f="${fName}"; if(ns.read(f)!==r) ns.write(f,r,'w')`;
-    // Run the command with auto-retries if it fails
+        `, jsonReplacer) ?? "null";}catch(e){r="ERROR: "+(typeof e=='string'?e:e?.message??JSON.stringify(e));}\n` +
+        (usePort ? `ns.getPortHandle(${portOffset} + ns.pid).write(r);\n` : '') +
+        `const f=${JSON.stringify(fName)}; if(ns.read(f)!==r) ns.write(f,r,'w')`;
     const pid = await runCommand_Custom(ns, fnRun, commandToFile, fNameCommand, args, verbose, maxRetries, retryDelayMs, silent);
+
+    if (usePort) {
+        const port = ns.getPortHandle(portOffset + pid);
+        let result;
+        await waitForProcessToComplete_Custom(ns, () => {
+            if (!port.empty()) {
+                result = port.read();
+                return false;
+            }
+            return ns.isRunning(pid);
+        }, pid, verbose);
+        if (result === undefined)
+            throw new Error(`Temp script ${fNameCommand} (PID ${pid}) exited without publishing a result. Check Recent Errors for that script.`);
+        if (result.startsWith("ERROR: "))
+            throw new Error(`Temp script ${fNameCommand} (PID ${pid}) failed: ${result.slice(7, 507)}`);
+        return JSON.parse(result, jsonReviver);
+    }
     // Wait for the process to complete. Note, as long as the above returned a pid, we don't actually have to check it, just the file contents
     // Fix: Also treat empty string (deleted file) as "still running" to avoid race condition with cleanup scripts
     const fnIsAlive = (ignored_pid) => {
@@ -522,7 +536,7 @@ export async function runCommand_Custom(ns, fnRun, command, fileName, args = [],
     let importFunctions = getExports(ns).filter(e => command.includes(`${e}`)) // Check if the script includes the name of any functions
         // To avoid false positives, narrow these to "whole word" matches (no alpha characters on either side)
         .filter(e => new RegExp(`(^|[^\\w])${e}([^\\w]|\$)`).test(command));
-    let script = (importFunctions.length > 0 ? `import { ${importFunctions.join(", ")} } from 'helpers.js'\n` : '') +
+    let script = (importFunctions.length > 0 ? `import { ${importFunctions.join(", ")} } from '${getFilePath("helpers.js")}'\n` : '') +
         `export async function main(ns) { ${command} }`;
     fileName = fileName || getDefaultCommandFileName(command, '.js');
     if (verbose)
