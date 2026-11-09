@@ -297,19 +297,22 @@ export async function main(ns) {
 }
 
 async function manageModulesWithSelfTermination(ns, state) {
-    const availableRAM = await getAvailableRam(ns);
-    
+    const runningFiles = new Set(ns.ps('home').map(process => process.filename));
+
     for (const [name, config] of Object.entries(MODULES)) {
+        const availableRAM = await getAvailableRam(ns);
         const shouldRun = shouldModuleRun(ns, name, config, state, availableRAM);
-        const isRunning = ns.isRunning(config.file, 'home');
-        
-        // Get dynamic RAM cost instead of hardcoded value
-        const dynamicRamCost = await getModuleRamCost(ns, config.file);
-        
+        const isRunning = runningFiles.has(config.file);
+
         if (shouldRun && !isRunning) {
+            const dynamicRamCost = await getModuleRamCost(ns, config.file);
             if (availableRAM >= dynamicRamCost) {
-                log(ns, `INFO: Starting module: ${name} (${dynamicRamCost.toFixed(1)}GB RAM)`, false, 'info');
-                await ns.run(config.file, 1);
+                const pid = ns.run(config.file, 1);
+                if (!pid) {
+                    log(ns, `ERROR: Could not start ${config.file} (${dynamicRamCost.toFixed(1)}GB required)`, false, 'error');
+                    continue;
+                }
+                log(ns, `INFO: Started module: ${name} (PID ${pid}, ${dynamicRamCost.toFixed(1)}GB RAM)`, false, 'info');
                 await ns.sleep(1000); // Allow time to start
             } else {
                 log(ns, `WARNING: Insufficient RAM for ${name} (${dynamicRamCost.toFixed(1)}GB needed, ${availableRAM.toFixed(1)}GB available)`, false, 'warning');

@@ -172,6 +172,7 @@ export async function main(ns) {
     let nextBatchTime = {}; // {serverName: number} -- timestamp when the next batch should start
     let serverBatchCount = {}; // {serverName: number} -- running batch counter for discrimination args
     let firstBatchEndTime = {}; // {serverName: number} -- when the first active batch completes (overlap guard)
+    const batchRecoveryTargets = new Set();
 
     /** Ram-dodge getting updated player info with caching.
      * @param {NS} ns
@@ -842,6 +843,15 @@ export async function main(ns) {
 
                     const server = targetingOrder[i];
                     server.resetCaches(); // For each new loop, reset any cached properties
+                    if (batchRecoveryTargets.has(server.name)) {
+                        // Let any earlier batches finish before the normal prep check runs again.
+                        if (Date.now() < nextBatchTime[server.name] || await server.isTargeting()) {
+                            skipped.push(server);
+                            continue;
+                        }
+                        batchRecoveryTargets.delete(server.name);
+                        clearDripState(server.name);
+                    }
                     // Attempt to root any servers that are not yet rooted
                     if (!server.hasRoot() && server.canCrack())
                         await doRoot(ns, server);
@@ -1657,17 +1667,34 @@ export async function main(ns) {
         if (verbose && runOnce) logSchedule(ns, batchTiming, currentTarget);
         const schedObj = getScheduleObject(ns, batchTiming, currentTarget, batchNumber);
 
-        for (const schedItem of schedObj.scheduleItems) {
-            const discriminationArg = `Batch ${schedObj.batchNumber}-${schedItem.description}`;
-            const args = [currentTarget.name, schedItem.start.getTime(), schedItem.end - schedItem.start, discriminationArg];
-            args.push(...getFlagsArgs(schedItem.toolShortName, currentTarget.name));
-            if (options.i && currentTerminalServer?.name == currentTarget.name && schedItem.toolShortName == "hack")
-                schedItem.toolShortName = "manualhack";
-            const result = await arbitraryExecution(ns, getTool(schedItem.toolShortName), schedItem.threadsNeeded, args)
-            if (result == false) {
-                if (verbose) log(ns, `INFO: Scheduling failed for ${getTargetSummary(currentTarget)} ${discriminationArg} (RAM likely full)`);
+        const launchedPids = [];
+        let scheduled = false;
+        try {
+            for (const schedItem of schedObj.scheduleItems) {
+                const discriminationArg = `Batch ${schedObj.batchNumber}-${schedItem.description}`;
+                const args = [currentTarget.name, schedItem.start.getTime(), schedItem.end - schedItem.start, discriminationArg];
+                args.push(...getFlagsArgs(schedItem.toolShortName, currentTarget.name));
+                if (options.i && currentTerminalServer?.name == currentTarget.name && schedItem.toolShortName == "hack")
+                    schedItem.toolShortName = "manualhack";
+                if (!await arbitraryExecution(ns, getTool(schedItem.toolShortName), schedItem.threadsNeeded, args,
+                    null, false, null, launchedPids)) {
+                    if (verbose) log(ns, `INFO: Scheduling failed for ${getTargetSummary(currentTarget)} ${discriminationArg} (RAM likely full)`);
+                    return false;
+                }
+            }
+            scheduled = true;
+        } catch (err) {
+            log(ns, `ERROR: Could not launch batch ${batchNumber} for ${currentTarget.name}: ${getErrorInfo(err)}`, false, 'error');
+            return false;
+        } finally {
+            if (!scheduled) {
                 currentTarget.previousCycle = `INCOMPLETE batch ${batchNumber} for ${getTargetSummary(currentTarget)}`;
-                return false;
+                if (launchedPids.length > 0) {
+                    // A cleanup helper may not fit in RAM after a failed launch.
+                    const stopped = launchedPids.filter(pid => ns.kill(pid)).length;
+                    batchRecoveryTargets.add(currentTarget.name);
+                    log(ns, `WARNING: Cancelled ${stopped}/${launchedPids.length} workers from incomplete batch ${batchNumber} on ${currentTarget.name}. Rechecking target before scheduling again.`, false, 'warning');
+                }
             }
         }
         if (verbose)
@@ -1725,7 +1752,7 @@ export async function main(ns) {
             if (!success) {
                 // Back off: don't retry for a few seconds to avoid spamming when RAM is tight
                 nextBatchTime[serverName] = Math.max(nextBatchTime[serverName], Date.now() + 3000);
-                break;
+                return true;
             }
             serverBatchCount[serverName]++;
             nextBatchTime[serverName] += cycleTimingDelay;
@@ -1746,7 +1773,7 @@ export async function main(ns) {
     // If it can't run all the threads at once, it runs as many as it can across the spectrum of daemons available.
     /** @param {NS} ns
      * @param {Tool} tool - An object representing the script being executed **/
-    async function arbitraryExecution(ns, tool, threads, args, preferredServerName = null, useSmallestServerPossible = false, allowThreadSplitting = null) {
+    async function arbitraryExecution(ns, tool, threads, args, preferredServerName = null, useSmallestServerPossible = false, allowThreadSplitting = null, launchedPids = null) {
         // We will be using the list of servers that is sorted by most available ram
         const igRes = tool.ignoreReservedRam; // Whether this tool ignores "reserved ram"
         const rootedServersByFreeRam = getAllServersByFreeRam().filter(server => server.hasRoot() && server.totalRam(igRes) > 1.6);
@@ -1828,8 +1855,13 @@ export async function main(ns) {
                     missing_scripts.push(getFilePath('/Tasks/contractor.js.solver.js'), getFilePath('/Tasks/run-with-delay.js'))
                 if (verbose)
                     log(ns, `Copying ${tool.name} and ${missing_scripts.length - 1} dependencies from ${daemonHost} to ${targetServer.name} so that it can be executed remotely.`);
-                await getNsDataThroughFile(ns, `ns.scp(ns.args.slice(2), ns.args[0], ns.args[1])`, '/Temp/copy-scripts.txt', [targetServer.name, daemonHost, ...missing_scripts])
-                missing_scripts.forEach(s => targetServer._files[s] = true); // Make note that these files now exist on the target server
+                const copied = await getNsDataThroughFile(ns, `ns.scp(ns.args.slice(2), ns.args[0], ns.args[1])`,
+                    '/Temp/copy-scripts.txt', [targetServer.name, daemonHost, ...missing_scripts]);
+                if (!copied) {
+                    log(ns, `ERROR: Failed to copy ${tool.name} or its dependencies to ${targetServer.name}`, false, 'error');
+                    return false;
+                }
+                missing_scripts.forEach(file => targetServer._files.add(file.replace(/^\//, '')));
                 //await ns.sleep(5); // Workaround for Bitburner bug https://github.com/danielyxie/bitburner/issues/1714 - newly created/copied files sometimes need a bit more time, even if awaited
             }
             // By default, tools executed in this way will be marked as "temporary" (not to be included in the save file or recent scripts history)
@@ -1838,6 +1870,7 @@ export async function main(ns) {
                 log(ns, `ERROR: Failed to exec ${tool.name} on server ${targetServer.name} with ${maxThreadsHere} threads`, false, 'error');
                 return false;
             }
+            launchedPids?.push(pid);
             // Decrement the threads that have been successfully scheduled
             remainingThreads -= maxThreadsHere;
             if (remainingThreads > 0) {
