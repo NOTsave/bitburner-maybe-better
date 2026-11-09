@@ -536,7 +536,8 @@ export async function runCommand_Custom(ns, fnRun, command, fileName, args = [],
     let importFunctions = getExports(ns).filter(e => command.includes(`${e}`)) // Check if the script includes the name of any functions
         // To avoid false positives, narrow these to "whole word" matches (no alpha characters on either side)
         .filter(e => new RegExp(`(^|[^\\w])${e}([^\\w]|\$)`).test(command));
-    let script = (importFunctions.length > 0 ? `import { ${importFunctions.join(", ")} } from '${getFilePath("helpers.js")}'\n` : '') +
+    const helperImport = JSON.stringify(getFilePath('helpers.js'));
+    let script = (importFunctions.length > 0 ? `import { ${importFunctions.join(", ")} } from ${helperImport}\n` : '') +
         `export async function main(ns) { ${command} }`;
     fileName = fileName || getDefaultCommandFileName(command, '.js');
     if (verbose)
